@@ -1,0 +1,80 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+LoRA fine-tuning of a small causal LM (`Qwen/Qwen2.5-0.5B-Instruct`) for text-to-SQL on the Spider
+dataset. The package is `lora_sql`, laid out as a `src/` package and installed editable into `.venv`.
+
+**This is an early-stage scaffold.** Several core modules exist only as empty placeholder files
+committed on purpose so the module paths and imports are stable:
+`src/lora_sql/data.py`, `src/lora_sql/lora.py`, `src/lora_sql/train.py`, `pyproject.toml`,
+`configs/week1_parity.yaml`, `tests/test_lora_parity.py`. Downstream code already imports names that
+don't exist yet — treat these as the contract to implement, not a bug:
+- `lora_sql.data` must provide `Example`, `format_prompt(example)`, `load_examples(path)`.
+- `lora_sql.lora` must provide `inject_lora(model, target_modules, rank, alpha, dropout)`.
+- `configs/week1_parity.yaml` must provide keys read by `eval/runner.py`: `model.name_or_path`,
+  `model.dtype`, `lora.target_modules`, `lora.rank`, `lora.alpha`, `data.eval_path`, `data.db_dir`,
+  `eval.max_new_tokens`, `eval.results_path`.
+- `pyproject.toml` is empty, so the editable install (`pip install -e .`) has no build backend
+  configured — check this before assuming packaging works.
+
+Only `src/lora_sql/eval/` (runner.py, execute.py, metrics.py) and the two `scripts/` files are
+actually implemented.
+
+## Environment & commands
+
+Python 3.11, venv at `.venv/` (already created; dependencies pinned in `requirements.txt`).
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt   # includes `-e .` editable install of lora_sql
+
+# Sanity-check the training environment (CUDA, bitsandbytes, model load, LoRA target modules)
+python scripts/check_env.py
+
+# Inspect a Spider dev example end-to-end (question, gold SQL, execution result, schema)
+python scripts/check_spider_database.py
+
+# Run the eval loop (generate -> execute -> score) once data.py/lora.py are implemented
+python -m lora_sql.eval.runner --config configs/week1_parity.yaml
+python -m lora_sql.eval.runner --config configs/week1_parity.yaml --lora-checkpoint path/to/weights.pt
+
+# Tests (pytest is not in requirements.txt yet; there's no pytest config in the repo)
+pytest tests/
+```
+
+There is no lint/format tooling configured in this repo yet.
+
+## Data
+
+`data/spider_data/` (untracked, gitignored — populated locally from `data/spider.zip`) is the Spider
+text-to-SQL dataset: `train_spider.json` / `train_others.json` (train), `dev.json` (dev, 1034
+examples / 20 dbs), `tables.json` (schemas for all dbs), and `database/<db_id>/<db_id>.sqlite` /
+`test_database/<db_id>/<db_id>.sqlite` (per-database SQLite files used both as few-shot schema
+context and as the execution target for scoring). `results/` and `runs/` are also gitignored,
+kept in git only via `.gitkeep`, and are the expected output locations for eval results and
+training runs respectively.
+
+## Eval architecture (`src/lora_sql/eval/`)
+
+The eval pipeline is generate → execute → score, split across three modules with a clean
+separation of concerns — keep new eval code in the matching module rather than adding a fourth:
+
+- `runner.py` — orchestration only. Loads a YAML config, loads the base model + tokenizer, calls
+  `inject_lora` (optionally loading a LoRA checkpoint via `torch.load(..., strict=False)`),
+  generates SQL greedily (`do_sample=False`) per example, and writes a JSON report
+  (`{"summary": ..., "results": [...]}`) to `cfg["eval"]["results_path"]`.
+- `execute.py` — SQLite execution and comparison, no model/tokenizer code. `run_query` executes
+  against the per-`db_id` SQLite file and converts any `sqlite3.Error` into `ExecutionError`, so a
+  broken generation is a scoring signal rather than a crash. `results_match` does an
+  order-insensitive comparison of result sets with float rounding, matching Spider's execution
+  accuracy convention. `execute_and_compare` treats a predicted query that fails to execute as
+  simply "wrong," not an error.
+- `metrics.py` — pure aggregation over `EvalResult` dataclasses into a `MetricsSummary`, with an
+  overall accuracy plus a breakdown by `difficulty` (defaults to `"unknown"` if not set upstream).
+
+When implementing `data.py`/`lora.py`, keep the same shape: `Example` should carry at least
+`db_id`, `question`, `query` (gold SQL) since `runner.py` already destructures those fields, and
+`inject_lora` should return a model still compatible with the standard HF `generate()` call.
