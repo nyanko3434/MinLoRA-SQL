@@ -9,3 +9,5 @@ data/
 runs/
 
 .DS_Store
+
+.env
