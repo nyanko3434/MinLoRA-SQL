@@ -62,6 +62,13 @@ def inject_lora(
     dropout: float = 0.0,
 ) -> nn.Module:
     """Replace nn.Linear children named in target_modules with LoRALinear wrappers, in place."""
+    # Freeze the whole model up front. LoRALinear only freezes the base_layer it wraps, so
+    # without this, every non-targeted param (embeddings, lm_head, norms, untargeted
+    # projections) stays trainable from from_pretrained's default and silently trains alongside
+    # the adapters.
+    for p in model.parameters():
+        p.requires_grad_(False)
+
     candidates = []
     linear_names_seen = []
     for _, parent in model.named_modules():
