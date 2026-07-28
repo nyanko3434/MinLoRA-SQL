@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-LoRA fine-tuning of a small causal LM (`Qwen/Qwen2.5-0.5B-Instruct`) for text-to-SQL on the Spider
-dataset. The package is `lora_sql`, laid out as a `src/` package and installed editable into `.venv`.
+A from-scratch LoRA implementation validated numerically against HuggingFace `peft`, applied to
+text-to-SQL fine-tuning on Spider with an execution-based eval harness. The package is `lora_sql`,
+laid out as a `src/` package and installed editable into `.venv`.
 
 **This is an early-stage scaffold.** Several core modules exist only as empty placeholder files
 committed on purpose so the module paths and imports are stable:
@@ -52,7 +53,7 @@ There is no lint/format tooling configured in this repo yet.
 `data/spider_data/` (untracked, gitignored — populated locally from `data/spider.zip`) is the Spider
 text-to-SQL dataset: `train_spider.json` / `train_others.json` (train), `dev.json` (dev, 1034
 examples / 20 dbs), `tables.json` (schemas for all dbs), and `database/<db_id>/<db_id>.sqlite` /
-`test_database/<db_id>/<db_id>.sqlite` (per-database SQLite files used both as few-shot schema
+ (per-database SQLite files used both as few-shot schema
 context and as the execution target for scoring). `results/` and `runs/` are also gitignored,
 kept in git only via `.gitkeep`, and are the expected output locations for eval results and
 training runs respectively.
@@ -78,3 +79,23 @@ separation of concerns — keep new eval code in the matching module rather than
 When implementing `data.py`/`lora.py`, keep the same shape: `Example` should carry at least
 `db_id`, `question`, `query` (gold SQL) since `runner.py` already destructures those fields, and
 `inject_lora` should return a model still compatible with the standard HF `generate()` call.
+
+## Model roles
+- `Qwen/Qwen2.5-0.5B-Instruct` — Week 1 numerical-parity fixture ONLY. Never fine-tuned.
+  Chosen because its module names are identical to the 7B, so target strings transfer verbatim.
+- `Qwen/Qwen2.5-Coder-7B-Instruct` — the actual QLoRA fine-tune target, Week 2 onward.
+
+## Hard rules
+- `data/spider_data/test.json` and `test_database/` are HELD OUT. Never read them, never
+  evaluate against them, never tune on them. `database/` is the only execution target.
+- Never use `base_layer.weight.shape` to get layer dimensions. Under bitsandbytes `Linear4bit`
+  the weight is packed and its shape is wrong. Read `.in_features` / `.out_features`.
+- transformers is pinned to 5.14.1 (v5). Use `dtype=`, never `torch_dtype=`.
+  `apply_chat_template` returns a BatchEncoding: `.to(device)` + `model.generate(**inputs)`.
+- Parity tests run in fp32. bf16 carries ~3 significant decimal digits and cannot reach
+  atol=1e-6. Training runs in bf16.
+- LoRA checkpoints: save only keys containing `lora_`, and after `load_state_dict(..., strict=False)`
+  assert `unexpected_keys == []` and that the expected lora keys were consumed. `strict=False`
+  silently loading nothing is a real failure mode here.
+- Ablations are new files in `configs/`, never edited copies of `train.py`.
+- GPU is an RTX 4060 Laptop, 8.2 GB VRAM. Assume memory is tight.

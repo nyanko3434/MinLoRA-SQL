@@ -29,7 +29,7 @@ def load_model_for_eval(cfg: dict, lora_checkpoint: str | None = None):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(cfg["model"]["name_or_path"], torch_dtype=dtype)
+    model = AutoModelForCausalLM.from_pretrained(cfg["model"]["name_or_path"], dtype=dtype)
     model = inject_lora(
         model,
         target_modules=cfg["lora"]["target_modules"],
