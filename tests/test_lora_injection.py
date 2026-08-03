@@ -8,7 +8,6 @@ import pytest
 import torch
 import torch.nn as nn
 
-from conftest import fresh_model
 from lora_sql.lora import LoRALinear, inject_lora, lora_param_stats
 
 TARGET_SETS = [
@@ -24,27 +23,27 @@ TARGET_SETS = [
 
 
 @pytest.mark.parametrize("target_modules,expected_layers,expected_params", TARGET_SETS)
-def test_wrap_count(base_model_and_tokenizer, target_modules, expected_layers, expected_params):
-    model = fresh_model(base_model_and_tokenizer)
+def test_wrap_count(fresh_model, target_modules, expected_layers, expected_params):
+    model = fresh_model()
     inject_lora(model, target_modules=target_modules, rank=8, alpha=16, dropout=0.0)
     stats = lora_param_stats(model)
     assert stats["n_lora_layers"] == expected_layers
 
 
 @pytest.mark.parametrize("target_modules,expected_layers,expected_params", TARGET_SETS)
-def test_param_count(base_model_and_tokenizer, target_modules, expected_layers, expected_params):
-    model = fresh_model(base_model_and_tokenizer)
+def test_param_count(fresh_model, target_modules, expected_layers, expected_params):
+    model = fresh_model()
     inject_lora(model, target_modules=target_modules, rank=8, alpha=16, dropout=0.0)
     stats = lora_param_stats(model)
     assert stats["lora"] == expected_params
 
 
-def test_bit_identical_at_init(base_model_and_tokenizer, batch):
+def test_bit_identical_at_init(base_model_and_tokenizer, fresh_model, batch):
     base_model, _ = base_model_and_tokenizer
     with torch.no_grad():
         base_logits = base_model(**batch).logits.clone()
 
-    model = fresh_model(base_model_and_tokenizer)
+    model = fresh_model()
     inject_lora(model, target_modules=("q_proj", "v_proj"), rank=8, alpha=16, dropout=0.0)
     with torch.no_grad():
         new_logits = model(**batch).logits
@@ -52,8 +51,8 @@ def test_bit_identical_at_init(base_model_and_tokenizer, batch):
     assert torch.equal(base_logits, new_logits)
 
 
-def test_freeze_check(base_model_and_tokenizer):
-    model = fresh_model(base_model_and_tokenizer)
+def test_freeze_check(fresh_model):
+    model = fresh_model()
     inject_lora(model, target_modules=("q_proj", "v_proj"), rank=8, alpha=16, dropout=0.0)
     stats = lora_param_stats(model)
 
@@ -64,8 +63,8 @@ def test_freeze_check(base_model_and_tokenizer):
     assert leaked == [], f"non-LoRA parameters require grad: {leaked}"
 
 
-def test_device_dtype_placement(base_model_and_tokenizer):
-    model = fresh_model(base_model_and_tokenizer)
+def test_device_dtype_placement(fresh_model):
+    model = fresh_model()
     inject_lora(model, target_modules=("q_proj", "v_proj"), rank=8, alpha=16, dropout=0.0)
 
     checked = 0

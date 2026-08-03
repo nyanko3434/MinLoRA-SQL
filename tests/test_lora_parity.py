@@ -10,7 +10,6 @@ import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import Linear as PeftLoraLinear
 
-from conftest import fresh_model
 from lora_sql.lora import LoRALinear, inject_lora
 
 TARGET_CASES = [
@@ -26,7 +25,7 @@ TARGET_CASES = [
 ]
 
 
-def build_parity_pair(base_model_and_tokenizer, rank, alpha, target_modules):
+def build_parity_pair(fresh_model, rank, alpha, target_modules):
     """Build matched peft/ours LoRA models with peft's adapter transplanted into ours.
 
     lora_B is zero-initialized on both sides, so a naive comparison at init is vacuously
@@ -41,10 +40,10 @@ def build_parity_pair(base_model_and_tokenizer, rank, alpha, target_modules):
         bias="none",
         use_rslora=False,
     )
-    peft_model = get_peft_model(fresh_model(base_model_and_tokenizer), cfg).eval()
+    peft_model = get_peft_model(fresh_model(), cfg).eval()
 
     our_model = inject_lora(
-        fresh_model(base_model_and_tokenizer),
+        fresh_model(),
         target_modules=target_modules,
         rank=rank,
         alpha=alpha,
@@ -69,9 +68,9 @@ def build_parity_pair(base_model_and_tokenizer, rank, alpha, target_modules):
 
 
 @pytest.mark.parametrize("rank,alpha,target_modules", TARGET_CASES)
-def test_forward_parity(base_model_and_tokenizer, batch, rank, alpha, target_modules):
+def test_forward_parity(fresh_model, batch, rank, alpha, target_modules):
     peft_model, our_model, _, _ = build_parity_pair(
-        base_model_and_tokenizer, rank, alpha, target_modules
+        fresh_model, rank, alpha, target_modules
     )
 
     with torch.no_grad():
@@ -82,9 +81,9 @@ def test_forward_parity(base_model_and_tokenizer, batch, rank, alpha, target_mod
 
 
 @pytest.mark.parametrize("rank,alpha,target_modules", TARGET_CASES)
-def test_backward_parity(base_model_and_tokenizer, batch, rank, alpha, target_modules):
+def test_backward_parity(fresh_model, batch, rank, alpha, target_modules):
     peft_model, our_model, peft_layers, mine = build_parity_pair(
-        base_model_and_tokenizer, rank, alpha, target_modules
+        fresh_model, rank, alpha, target_modules
     )
 
     peft_logits = peft_model(**batch).logits

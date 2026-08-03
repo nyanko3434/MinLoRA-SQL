@@ -25,7 +25,14 @@ def batch(base_model_and_tokenizer):
     return tokenizer("SELECT * FROM singer WHERE age > 30;", return_tensors="pt").to("cuda")
 
 
+@pytest.fixture
 def fresh_model(base_model_and_tokenizer):
-    """Deep-copy the pristine module-scoped base model so injection (in-place) can't leak state."""
+    """Factory returning a fresh deepcopy of the pristine session-scoped base model on
+    each call, so in-place injection (inject_lora / get_peft_model) can't leak state
+    across tests."""
     base_model, _ = base_model_and_tokenizer
-    return copy.deepcopy(base_model)
+
+    def _fresh():
+        return copy.deepcopy(base_model)
+
+    return _fresh
