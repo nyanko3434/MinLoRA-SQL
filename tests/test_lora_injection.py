@@ -4,16 +4,12 @@ Run in fp32 on CUDA: bf16 only carries ~3 significant decimal digits, which can'
 exact-equality assertions here (bit-identical logits at init, exact param/layer counts).
 """
 
-import copy
-
 import pytest
 import torch
 import torch.nn as nn
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from conftest import fresh_model
 from lora_sql.lora import LoRALinear, inject_lora, lora_param_stats
-
-MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 
 TARGET_SETS = [
     pytest.param(("q_proj", "v_proj"), 48, 540_672, id="qv"),
@@ -25,31 +21,6 @@ TARGET_SETS = [
         id="all7",
     ),
 ]
-
-
-@pytest.fixture(scope="module")
-def base_model_and_tokenizer():
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=torch.float32).cuda().eval()
-    return model, tokenizer
-
-
-@pytest.fixture(scope="module")
-def batch(base_model_and_tokenizer):
-    _, tokenizer = base_model_and_tokenizer
-    return tokenizer("SELECT * FROM singer WHERE age > 30;", return_tensors="pt").to("cuda")
-
-
-def fresh_model(base_model_and_tokenizer):
-    """Deep-copy the pristine module-scoped base model so injection (in-place) can't leak state."""
-    base_model, _ = base_model_and_tokenizer
-    return copy.deepcopy(base_model)
 
 
 @pytest.mark.parametrize("target_modules,expected_layers,expected_params", TARGET_SETS)

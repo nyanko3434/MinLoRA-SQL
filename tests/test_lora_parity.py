@@ -4,18 +4,14 @@ Run in fp32 on CUDA: bf16 only carries ~3 significant decimal digits, which can'
 atol=1e-6. A missing GPU is a broken environment here, not a reason to skip.
 """
 
-import copy
-
 import pytest
 import torch
 import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import Linear as PeftLoraLinear
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from conftest import fresh_model
 from lora_sql.lora import LoRALinear, inject_lora
-
-MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 
 TARGET_CASES = [
     pytest.param(4, 8, ("q_proj", "v_proj"), id="r4-qv"),
@@ -28,30 +24,6 @@ TARGET_CASES = [
         id="r8-all7",
     ),
 ]
-
-
-@pytest.fixture(scope="module")
-def base_model_and_tokenizer():
-    assert torch.cuda.is_available(), "CUDA not available: parity tests require a real GPU"
-
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=torch.float32).cuda().eval()
-    return model, tokenizer
-
-
-@pytest.fixture(scope="module")
-def batch(base_model_and_tokenizer):
-    _, tokenizer = base_model_and_tokenizer
-    return tokenizer("SELECT * FROM singer WHERE age > 30;", return_tensors="pt").to("cuda")
-
-
-def fresh_model(base_model_and_tokenizer):
-    """Deep-copy the pristine module-scoped base model so injection (in-place) can't leak state."""
-    base_model, _ = base_model_and_tokenizer
-    return copy.deepcopy(base_model)
 
 
 def build_parity_pair(base_model_and_tokenizer, rank, alpha, target_modules):
