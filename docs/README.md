@@ -530,12 +530,13 @@ Recorded here so they survive even if the file is regenerated:
 - Base model: Qwen2.5-Coder-7B-Instruct, QLoRA (4-bit via `bitsandbytes`,
   `bnb_4bit_compute_dtype=torch.bfloat16`) — fits the 8GB 4060 for iteration; cloud burst
   for a bigger run if wanted.
-- Custom ~60-line training loop (see decision above).
-- Dataset: Spider training split. BIRD-dev reserved purely for Week 3.
+- Custom training loop (see "Session 5 design" above): 4-bit nf4 base with bf16 compute, fp32
+  adapters, no autocast, micro-bs 1 with token-weighted grad accum 16, completion-only logits.
+- Dataset: `train_spider` + `train_others` (8,659). BIRD-dev reserved purely for Week 3.
 - `src/lora_sql/data.py` — ✅ **built in Session 4** (`Example`+`schema`, `render_schema`,
-  `format_prompt`, `load_examples`). Week 2's `train.py` reuses `format_prompt` and
-  `build_example`-style ID-level masking; ChatML via `apply_chat_template` is a Week 2 decision
-  (reachable here because Week 2 owns the training path, unlike the runner contract).
+  `format_prompt`, `load_examples`). Session 5 adds `encode_prompt` (ChatML + `SYSTEM_PROMPT`,
+  the single source of prompt ids for train and eval) and moves `build_example` in from
+  `scripts/toy_train.py`.
  
 **Week 3 — Evaluation harness — MOSTLY ALREADY BUILT**
  
@@ -562,9 +563,9 @@ Recorded here so they survive even if the file is regenerated:
 - Comparison table: base model vs. mine vs. peft-fine-tuned sanity check.
  
 **Known issue to fix before Week 3 numbers mean anything:** `runner.py`'s `generate_sql` tokenizes
-the raw prompt directly rather than going through `apply_chat_template`. For an `-Instruct` model
-that omits the chat wrapper it was tuned on, which will depress SQL quality. Mechanical tests are
-unaffected; real eval numbers are not.
+the raw prompt directly rather than using the chat wrapper the `-Instruct` model was tuned on,
+which will depress SQL quality. Fix decided in Session 5: `generate_sql` switches to
+`data.encode_prompt` (ChatML + `SYSTEM_PROMPT`), the same ids training uses.
  
 **Week 4 — Polish**
  
@@ -652,7 +653,8 @@ python -m lora_sql.eval.runner --config configs/week1_parity.yaml
 3. **`configs/week1_parity.yaml`** — still an empty placeholder. `data.db_dir` must point at
    `database/`, never `test_database/`. This is now the only remaining blocker to running the
    eval harness end-to-end.
-4. **`apply_chat_template` in `runner.py`** — fix before Week 3 numbers are meaningful.
+4. **ChatML in `runner.py`** — resolved by design (Session 5): `runner.generate_sql` switches to
+   `data.encode_prompt`. Closes once that lands in Session 5 Half 1.
 5. **Eval-harness hardening — before any real eval run (Week 3), none can bite until then.**
    Reviewed the `eval/` package in a Session 3 tail; three real issues, all latent because no
    checkpoint/generation/execution happens before Week 3:

@@ -24,9 +24,10 @@ must provide — treat them as the contract to implement, not a bug:
   `eval.max_new_tokens`, `eval.results_path`. **`data.db_dir` must point at `database/`, never
   `test_database/`** (held-out rule). This is the only remaining blocker to running the eval harness
   end-to-end.
-- `src/lora_sql/train.py` — the Week 2 custom training loop (Session 5). Reuses `data.py`'s
-  `format_prompt` and ID-level completion+eos masking; config-driven so ablations are N YAML files,
-  not N edited scripts.
+- `src/lora_sql/train.py` — the Week 2 custom training loop (Session 5). Gets prompt ids from
+  `data.encode_prompt` (ChatML + `SYSTEM_PROMPT`) and uses ID-level completion+eos masking
+  (`build_example`, moving from `scripts/toy_train.py` into `data.py` in Session 5 Half 1);
+  config-driven so ablations are N YAML files, not N edited scripts.
 
 **Already implemented:** `src/lora_sql/lora.py`, `src/lora_sql/data.py`, `src/lora_sql/eval/`
 (runner.py, execute.py, metrics.py), all three test files, `pyproject.toml`, and the `scripts/`
@@ -45,16 +46,18 @@ destructures `.db_id` / `.question` / `.query`. As built:
 - `format_prompt(example) -> str` — receives NO tokenizer; its output is fed straight to
   `tokenizer(prompt)`. So NO `apply_chat_template` / NO ChatML at this layer. Renders schema
   (CREATE TABLE DDL: columns+types, PRIMARY KEY, FOREIGN KEY, skipping the `-1 *` wildcard) then
-  the question, ending at `SQL: `. This is the shared train+eval contract — Week 2's `train.py`
-  reuses it verbatim. Training target is `format_prompt(example) + example.query + eos`, built at
-  the ID level (not string concat).
+  the question, ending at `SQL: `. As of the Session 5 design it is the prompt *text* only, not
+  the source of prompt ids — see `encode_prompt` below.
 - `load_examples(path, tables_path=None) -> list[Example]` — single positional arg is what
   `runner.py` calls; `tables_path` defaults to `Path(path).parent / "tables.json"`. Schema is
   cached per-`db_id` inside each call.
 - `render_schema(table_entry) -> str` — public, takes a whole `tables.json` entry; golden-string
   tested byte-for-byte against the real `perpetrator` entry.
-- ChatML is a Week 2 decision, reachable only in `train.py` (which owns its own tokenization),
-  NOT through the `runner.py`/`format_prompt` contract.
+- **Planned (Session 5 Half 1):** `encode_prompt` wraps the prompt in ChatML with an explicit
+  `SYSTEM_PROMPT` and is the single source of prompt ids for both train and eval;
+  `runner.generate_sql` switches to it instead of calling `tokenizer(prompt)` on raw text.
+  Training target is `encode_prompt(...) + query ids + eos`, built at the ID level (not string
+  concat).
 
 ## Environment & commands
 
