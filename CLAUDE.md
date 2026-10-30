@@ -149,7 +149,17 @@ be fixed before eval numbers mean anything:
 - transformers is pinned to 5.14.1 (v5). Use `dtype=`, never `torch_dtype=`.
   `apply_chat_template` returns a BatchEncoding: `.to(device)` + `model.generate(**inputs)`.
 - Parity tests run in fp32. bf16 carries ~3 significant decimal digits and cannot reach
-  atol=1e-6. Training runs in bf16.
+  atol=1e-6. Training: 4-bit base with bf16 compute, LoRA adapters fp32, no `torch.autocast`,
+  explicit casts in `LoRALinear` that mirror peft's order. Never call
+  `peft.prepare_model_for_kbit_training` and never upcast base params — it fp32-casts the untied
+  embed + lm_head (4.36 GB).
+- Prompt ids come only from `data.encode_prompt` (ChatML + `SYSTEM_PROMPT`), in both train and eval.
+- Training files are only `train_spider.json` / `train_others.json`. `config.py` enforces this;
+  dev is eval-only.
+- LoRA checkpoints go through `checkpoint.save_lora` / `load_lora` only. Never call a bare
+  `load_state_dict(strict=False)`.
+- Training is micro-bs 1 with token-weighted gradient accumulation and completion-only logits
+  (`logits_to_keep`).
 - peft `scaling` is a dict `{"default": alpha/r}` — index `["default"]`, never assume it's a
   scalar. (Session 3.)
 - Parity / weight-transplant tests must randomize peft's `lora_B` before copying, or the

@@ -315,6 +315,22 @@ bite on Qwen2.5: pad `<|endoftext|>` and eos `<|im_end|>` are **distinct token I
 pad-masking never clobbers a learned eos, and the toy loop is bs=1 (no padding) regardless.
 Downgraded from live bug to: **add `assert pad_id != eos_id` when batching starts in Week 2.**
  
+## Session 5 — pre-work (verified)
+ 
+- **Token IDs:** pad `<|endoftext|>` = 151643, eos `<|im_end|>` = 151645,
+  `generation_config.eos_token_id = [151645, 151643]`. pad ≠ eos confirmed.
+- **`build_example` lives in `scripts/toy_train.py:36`, not `data.py`** — moves to `data.py` in
+  Session 5 Half 1.
+- **peft 0.19.1:** `get_peft_model(..., autocast_adapter_dtype=True)` by default;
+  `prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None)`.
+- **Memory arithmetic for the 8.2 GB 4060:** untied embed+head ≈ 2.18 GB bf16 (4.36 GB if upcast
+  to fp32 — must not happen); 4-bit body ≈ 3.3 GB; full-sequence fp32 logits ≈ 1.2 GB at seq 1024
+  with grad. **Gradient checkpointing, completion-only logits, and no fp32 upcast of embed/head
+  are required.**
+- **Open question carried into the Session 5 spec:** adapters held in fp32 on the 4-bit path
+  (pure-bf16 adapter weights lose small AdamW updates to rounding). Hard rule "training in bf16"
+  to be reworded as "base compute in bf16."
+ 
 ---
  
 # DECISIONS MADE
@@ -338,6 +354,36 @@ different order disagree around 1e-2. `atol=1e-6` is physically unreachable in b
 correctness. The 0.5B in fp32 is ~2 GB, comfortable on the 4060. **State this explicitly in the
 writeup** — it's a point in favour, not a caveat. *(Vindicated in Session 3: fp32 parity is
 bit-identical.)*
+ 
+**Session 5 design — decided (pre-implementation).**
+ 
+- **Prompt:** ChatML via `data.encode_prompt` with an explicit `SYSTEM_PROMPT`. It is the single
+  source for train and eval, and `runner.generate_sql` switches to it (closes OPEN ITEM #4).
+- **Precision:** 4-bit nf4 base with bf16 compute, fp32 LoRA adapters (matches peft's
+  `autocast_adapter_dtype=True` default), no autocast. This supersedes "bf16 autocast" in the
+  training-loop decision.
+- **`prepare_model_for_kbit_training` is NOT used.** Verified source: it casts every
+  non-`Params4bit` bf16 param to fp32, and on the untied 7B embed + head that's 4.36 GB. We keep
+  only gradient checkpointing with `use_reentrant=False`, which per peft's source needs no
+  input-grad hook.
+- **Loss:** completion-only logits via `logits_to_keep=n_completion+1` (verified present in
+  v5.14.1 `Qwen2ForCausalLM.forward`); fp32 CE, summed. Micro-bs 1, grad accum 16,
+  token-weighted accumulation.
+- **Data:** `train_spider` + `train_others` (8,659). Measured prompt tokens: `train_spider`
+  p50/p95/p99/max = 255/855/2041/2067; `train_others` max 648; dev max 673. SQL max 201. Longest
+  training sequence ≈ 2,310 tokens. `max_seq_len` is set by the memory probe, and any dropped
+  `db_id`s get reported in the writeup.
+- **Hyperparameters:** lr 2e-4, warmup 3% then cosine to 0, wd 0, clip 1.0, dropout 0.05,
+  1 epoch, ≤ 6 h per run.
+- **Ablations:** alpha = 2r (scaling fixed at 2.0), so the rank ablation doesn't also change
+  effective LR. Configs: `qv_r8` (reference), `qv_r4`, `qv_r16`, `attn_r8`, `all7_r8`.
+- **Checkpoints:** `adapter.safetensors` (only `lora_` keys, under our module names) plus a
+  `lora_config.json` sidecar. `load_lora` rebuilds via `inject_lora` and asserts no unexpected
+  keys, every saved key consumed, every model `lora_` key covered, tensors equal, and at least one
+  `lora_B` nonzero. A peft-format export is deferred to Week 4.
+- **Cut:** resume-from-checkpoint. Mitigated by periodic adapter saves and `systemd-inhibit`.
+- **New claim to earn:** parity on the QLoRA path (4-bit 0.5B, ours vs peft). Record the measured
+  max diff.
  
 **Week 1 validation model: Qwen2.5-0.5B-Instruct** (locked). Chosen over Gemma-2B because
 its module names (`q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`)
@@ -439,7 +485,17 @@ Recorded here so they survive even if the file is regenerated:
 - Never use `base_layer.weight.shape` for layer dimensions — packed under `Linear4bit`.
   Use `.in_features` / `.out_features`.
 - transformers is pinned to 5.14.1 (v5). Use `dtype=`, never `torch_dtype=`.
-- Parity tests run in fp32; training runs in bf16. Do not mix.
+- Parity tests run in fp32. Training: 4-bit base with bf16 compute, LoRA adapters fp32, no
+  `torch.autocast`, explicit casts in `LoRALinear` that mirror peft's order. Never call
+  `peft.prepare_model_for_kbit_training` and never upcast base params — it fp32-casts the untied
+  embed + lm_head (4.36 GB).
+- Prompt ids come only from `data.encode_prompt` (ChatML + `SYSTEM_PROMPT`), in both train and eval.
+- Training files are only `train_spider.json` / `train_others.json`. `config.py` enforces this;
+  dev is eval-only.
+- LoRA checkpoints go through `checkpoint.save_lora` / `load_lora` only. Never call a bare
+  `load_state_dict(strict=False)`.
+- Training is micro-bs 1 with token-weighted gradient accumulation and completion-only logits
+  (`logits_to_keep`).
 - **peft `scaling` is a dict** `{"default": alpha/r}` — index `["default"]`, never assume it's a
   scalar. (Session 3.)
 - **Parity / weight-transplant tests must randomize peft's `lora_B` before copying**, or the
@@ -629,24 +685,6 @@ Session 3 housekeeping note above.)*
  
 # WHAT I WANT HELP WITH NEXT
  
-**Week 1 is fully complete** (LoRALinear + injection + 1e-6 parity + bit-identical training
-curve). Session 5 opens **Week 2 — QLoRA fine-tuning on Coder-7B.**
- 
-**Session 5 agenda (to design):**
- 
-1. **`src/lora_sql/train.py`** — the ~60-line custom loop (AdamW, gradient accumulation, cosine
-   schedule, bf16 autocast), config-driven so ablations are N YAML files not N scripts. Reuses
-   `format_prompt` and the ID-level completion+eos masking from Session 4's `build_example`.
-2. **QLoRA setup** — Coder-7B in 4-bit (`bnb_4bit_compute_dtype=torch.bfloat16`) on the 8.2 GB
-   4060. `LoRALinear`'s `compute_dtype` resolution already handles the 4-bit path.
-3. **ChatML** — now reachable, since `train.py` owns its own tokenization (unlike the
-   `runner.py` contract). Apply the chat template at train time; keep it consistent with eval.
-4. **Batching guard** — when the loop moves past bs=1, add `assert pad_id != eos_id` (the
-   downgraded masking trap).
- 
-**Before any real Week 3 eval numbers** (not blocking Session 5, but queued): the `runner.py`
-`apply_chat_template` fix (OPEN ITEM #4) and the eval-harness hardening (OPEN ITEM #5 —
-unguarded checkpoint load, read-write DB open, NULL-crashing `results_match`).
- 
-First step of Session 5: decide the `train.py` config schema and the checkpoint save/load key
-convention (the "highest-value trap" — save only `lora_` keys, assert they map on load).
+Session 5 spec written (two halves, above decisions). Next: implement Half 1 in Claude Code
+(step 0 introspection first), end the sitting by launching the memory probe; then Half 2, end by
+launching run #1 (`qv_r8`).
