@@ -14,7 +14,7 @@ lora:
 data:
   spider_root: data/spider_data
   train_files: [train_spider.json, train_others.json]   # the only files config.py allows
-  max_seq_len: 2560       # final value set from probe
+  max_seq_len: 2048       # probe (results/probe_*.json): all7_r8 OOMs at 2560; 2048 drops 82 baseball_1 examples (0.95%)
 train:
   micro_batch_size: 1
   grad_accum_steps: 16

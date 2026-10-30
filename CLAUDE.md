@@ -112,10 +112,13 @@ There is no lint/format tooling configured in this repo yet.
 text-to-SQL dataset: `train_spider.json` / `train_others.json` (train), `dev.json` (dev, 1034
 examples / 20 dbs), `tables.json` (schemas for all dbs), and
 `database/<db_id>/<db_id>.sqlite` (per-database SQLite files used both as few-shot schema
-context and as the execution target for scoring). `results/` and `runs/` are also gitignored,
-kept in git only via `.gitkeep`, and are the expected output locations for eval results and
-training runs respectively. Note: the committed toy-figure artifacts
-(`results/toy_loss_curves.png`, `results/toy_loss_*.json`) are exceptions kept in git.
+context and as the execution target for scoring). `runs/` is gitignored (kept in git only via
+`.gitkeep`) and is the output location for training runs and logs. `results/` is NOT gitignored: it
+is the output location for eval results and holds committed artifacts — the toy figure
+(`results/toy_loss_curves.png`, `results/toy_loss_*.json`) and the memory-probe evidence
+(`results/probe_qv_r8.json`, `results/probe_all7_r8.json`), which set `data.max_seq_len = 2048` in
+every `configs/train/*.yaml` (all7_r8 OOMs at 2560; 2048 drops only 82 `baseball_1` examples).
+Re-running `probe_memory.py` overwrites `results/probe_<run_name>.json`.
 
 ## Eval architecture (`src/lora_sql/eval/`)
 

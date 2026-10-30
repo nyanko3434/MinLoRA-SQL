@@ -375,11 +375,31 @@ Downgraded from live bug to: **add `assert pad_id != eos_id` when batching start
     bit-identical grads (alignment proven), and the end-to-end `logits_to_keep` path is checked at
     1e-5. An off-by-one misalignment moves the loss 0.785 → 11.8 — six orders above the tolerance.
   - **Train length distribution (Coder-7B tokenizer, both train files, 8,659 examples):** total p50
-    374 / p90 707 / p99 1310 / max 2228; completion p50 28 / p99 121 / max 202. `max_seq_len` 2560
-    drops nothing.
+    374 / p90 707 / p99 1310 / max 2228; completion p50 28 / p99 121 / max 202. Dropped by
+    `max_seq_len`: 512 → 2365; 1024 → 184 (baseball_1 82, cre_Drama_Workshop_Groups 82, sakila_1 13,
+    cre_Theme_park 6, formula_1 1); 1536 and 2048 → 82 (all baseball_1, 2049–2228 tokens); 2560 → 0.
   - **Pre-flight (qv_r8, 7B nf4):** embed / lm_head stay bf16; footprint 5.08 GB; seq 512 peaks at
-    5.67 GB allocated, 1.03 s/step; peak host RAM during load ≈ 8.7 GB of 13. Full probe numbers
-    (all7_r8, qv_r8) — TODO, from `results/probe_*.json`.
+    5.67 GB allocated, 1.03 s/step; peak host RAM during load ≈ 8.7 GB of 13.
+  - **Memory probe (7B nf4, 3 AdamW steps per length on synthetic ids with a 202-token completion;
+    sec/step = median of steps 2–3; `results/probe_{qv_r8,all7_r8}.json`).** Peak alloc / reserved GB,
+    sec/step:
+
+    | seq_len | qv_r8 (2.52M LoRA params) | all7_r8 (20.2M LoRA params) |
+    | --- | --- | --- |
+    | 512  | 5.67 / 5.75, 1.06 | 5.87 / 6.20, 1.41 |
+    | 1024 | 5.78 / 6.00, 1.87 | 6.11 / 6.45, 2.64 |
+    | 1536 | 6.00 / 6.23, 2.76 | 6.45 / 6.94, 3.95 |
+    | 2048 | 6.22 / 6.57, 3.75 | 6.79 / 7.25, 5.41 |
+    | 2560 | 6.46 / 6.81, 4.72 | **OOM** (7.14 / 7.52 before failing) |
+
+    Projected epoch at 2048 (8,577 kept, 537 optimizer steps): qv_r8 2.72 h, all7_r8 3.66 h, vs the
+    6 h budget. Slight overestimates: the probe steps AdamW every micro-step and charges examples
+    under 512 tokens as 512.
+  - **`max_seq_len = 2048` for all five configs** (one value, so the ablations train on identical
+    data). It is the largest probed length where all7_r8 fits (~0.75 GB reserved headroom). It drops
+    82 examples (0.95%), all from `baseball_1`; Spider's train and dev databases are disjoint, so no
+    dev database loses coverage. Keeping everything (~2240) would leave ~0.6 GB on all7_r8 for an
+    8,600-step run — too tight.
  
 ---
  
