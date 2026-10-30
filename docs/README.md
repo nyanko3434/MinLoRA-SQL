@@ -1,0 +1,652 @@
+# MinLoRA-SQL
+ 
+**A from-scratch LoRA implementation, numerically verified against HuggingFace `peft`, applied to
+text-to-SQL fine-tuning with an execution-based evaluation harness.**
+ 
+## Context (this file is the Project knowledge base — any new chat starts here)
+ 
+I'm a Computer Engineering student (B.E., graduating 2027) building a resume project.
+Background relevant here: completed a 3-month AI/ML internship at Fusemachines building
+a production RAG chatbot (Qdrant, AWS EC2, Knowledge Ingestion API), so I already have
+hands-on RAG/vector-DB experience — this new project is deliberately going deeper into
+**fine-tuning** instead, so it doesn't overlap with that.
+ 
+**Timeframe:** 2-4 weeks, at **1-2 focused hours per day** (~40 hours total). This budget
+is the binding constraint on the whole plan — see "Scope cuts" below.
+ 
+**Goal / resume angle:** "Deep/research-y," not just "I called an API and fine-tuned a model."
+The differentiator is doing two things most student projects skip:
+ 
+1. Implementing LoRA myself (not just using HF's `peft`) and **numerically verifying** it
+   against `peft` — forward and backward agreement to 1e-6, not just "loss curves look similar."
+   **✅ DONE as of Session 3 — this claim is now proven, not aspirational.** Session 4 adds the
+   corroborating training-curve figure (200 steps, ours vs peft, max per-step loss δ = 0.0).
+2. Building a rigorous, objective evaluation harness (execution-based accuracy), instead of
+   eyeballing outputs or using an LLM-judge.
+ 
+The name undersells it slightly: the **numerical parity claim is the actual differentiator**,
+not the fact that the implementation is small. Any framing (resume bullet, README intro,
+writeup abstract) should lead with parity, not with "minimal."
+ 
+**Domain: SQL generation (text-to-SQL).** Chosen over code review/bug-fixing because
+SQL eval is free and objective — run the generated query against a real DB and diff the
+result set — whereas rigorous bug-fix eval (running original test suites per repo, SWE-bench
+style) would eat most of the budget on infra instead of the fine-tuning/LoRA work
+that's actually the point of the project.
+ 
+## Hardware / environment (verified working)
+ 
+| Item | Value |
+|---|---|
+| GPU | RTX 4060 Laptop, 8.2 GB VRAM |
+| Compute capability | 8.9 (Ada Lovelace) — native bf16 |
+| OS | Arch Linux (native, no WSL) |
+| Python | 3.11, venv at `.venv/` |
+| torch | 2.5.1+cu121 |
+| transformers | **5.14.1 — pinned, decision closed (see below)** |
+| peft | 0.19.1 |
+| bitsandbytes | 0.49.2 — verified working, `Linear4bit` forward passes in bf16 |
+| pytest | 9.1.1 |
+ 
+Repo path: `~/Documents/Projects/SQL_Fine-Tune`.
+ 
+Cloud burst to RunPod/Vast.ai (a few $/hr for an A100) remains available for heavier runs
+if the 4060 proves too slow for Week 2.
+ 
+## How I'm using Claude Pro for this
+ 
+- **This Project (browser/app)** — planning, decisions, conceptual discussion, spec writing,
+  reviewing results, writing up the final report. The knowledge base holds this README, so any
+  new chat inside the Project already has full context — no need to re-paste it.
+- **Claude Code** — actual implementation, run against the local repo.
+- **Working pattern that has worked well so far:** decisions and a **detailed spec** get written
+  in the Project chat, then pasted into Claude Code **in plan mode (Shift+Tab)**. Review the plan
+  before approving — the plan is where design gaps surface cheaply. Split large specs into halves
+  (module first, tests second) and commit between them, so a bad generation is one
+  `git checkout -- <path>` away from gone. I don't want full code pasted into chat; specs +
+  checklists are the right granularity.
+- **`CLAUDE.md` lives in the repo root** and is Claude Code's equivalent of this README. It is
+  loaded at the start of every Claude Code session. Durable constraints go there; see
+  "CLAUDE.md hard rules" below for what it currently contains.
+- **Rhythm:** Pro usage is shared across chat and Claude Code, so batch Claude Code into focused
+  sessions rather than leaving it open idle.
+- Whenever a chat produces a decision or result worth keeping, it gets folded back into
+  this README and re-uploaded to the Project's knowledge base, since chats inside a
+  Project don't share history with each other automatically.
+- **Session rule (from the 1-2 hr/day constraint):** every session should *end* by launching
+  something long-running and walking away. The GPU (or the network) should be working while I'm not.
+ 
+---
+ 
+# PROGRESS
+ 
+## Session 1 — COMPLETE (environment + data)
+ 
+**Environment:** venv created, all packages installed, `requirements.txt` frozen, repo
+scaffolded and committed. `scripts/check_env.py` passes end-to-end.
+ 
+**bitsandbytes verified early on purpose** — it's the single most likely thing to break
+Week 2, and it breaks at install level rather than usage level. Confirmed working:
+`Linear4bit(64, 64, compute_dtype=torch.bfloat16)` forward pass returns bf16.
+ 
+**Spider downloaded and verified.** Google Drive file ID `1403EGqzIDoHMdQF4c9Bkyl7dZLZ5Wt6J`
+(linked from yale-lily.github.io/spider), ~197 MB zip, extracts to `data/spider_data/`:
+ 
+- `train_spider.json` (7,000 examples), `train_others.json`, `dev.json` (**1,034** — matches
+  the published count), `tables.json`, `dev_gold.sql`, `train_gold.sql`
+- `database/` — **166** `.sqlite` files (train + dev pool)
+- `test_database/` — **206** `.sqlite` files, plus `test.json` / `test_tables.json` / `test_gold.sql`
+- `__MACOSX/` and `.DS_Store` junk — stripped
+ 
+Verified the databases are actually *populated*, not empty schema shells: ran `dev.json[0]`
+gold query (`SELECT count(*) FROM singer` on `concert_singer`) → returned `[(6,)]`.
+ 
+**Qwen2.5-0.5B-Instruct loads and generates.** Architecture confirmed:
+ 
+| Property | Value |
+|---|---|
+| hidden size | 896 |
+| layers | 24 |
+| attention heads | 14 query / 2 KV (GQA), head_dim 64 |
+| `q_proj`, `o_proj` | 896 → 896 |
+| `k_proj`, `v_proj` | 896 → 128 (GQA asymmetry) |
+| `gate_proj`, `up_proj` | 896 → 4864 |
+| `down_proj` | 4864 → 896 |
+ 
+**Also built in Session 1 but not recorded at the time:** the entire `src/lora_sql/eval/`
+package (`runner.py`, `execute.py`, `metrics.py`) is *already implemented*. This was discovered
+when Claude Code's `/init` summarised the repo. See "Week 3 status" below — this materially
+loosens the remaining budget.
+ 
+## Session 2 — COMPLETE (`LoRALinear` + injection + tests)
+ 
+`src/lora_sql/lora.py` and `tests/test_lora_injection.py` are implemented and committed.
+**`pytest -v` → 10 passed.**
+ 
+**Packaging blockers found and fixed first** (both would have failed the test imports):
+ 
+- `pyproject.toml` was empty — no build backend, so `pip install -e .` could not have worked.
+  Now has `[build-system]` (setuptools), `[project]`, `[tool.setuptools.packages.find] where = ["src"]`,
+  and `[tool.pytest.ini_options] testpaths = ["tests"]`.
+- `pytest` was missing from `requirements.txt`.
+- Gate to re-run after any packaging change: `python -c "import lora_sql; print('ok')"`.
+ 
+**Also fixed:** `eval/runner.py` was calling `from_pretrained(..., torch_dtype=dtype)`, the v4
+keyword. Changed to `dtype=`.
+ 
+### The `inject_lora` contract, as built
+ 
+```python
+inject_lora(model, target_modules=("q_proj","v_proj"), rank=8, alpha=16, dropout=0.0) -> model
+```
+ 
+This contract is **fixed by `eval/runner.py`**, which already calls it by keyword and assigns
+the result directly (`model = inject_lora(...)`). Parameter names are exact; the return is the
+**model alone, not a tuple**. Wrap counts are exposed separately via `lora_param_stats(model)`,
+which returns `{"total", "trainable", "lora", "n_lora_layers"}`.
+ 
+**`inject_lora` freezes the entire base model** as its first action, before wrapping — matching
+peft's `get_peft_model` behaviour. The caller does not need to freeze anything. Ordering matters:
+`lora_A` / `lora_B` are created with `requires_grad=True` during wrapping, so freezing after
+wrapping would freeze the adapters too and train nothing. (This gap was caught by the freeze test,
+not by inspection — the test paid for itself immediately.)
+ 
+### Design decisions inside `lora.py`
+ 
+- **Shape convention matches peft exactly.** `lora_A` is `(r, in_features)`, `lora_B` is
+  `(out_features, r)` — identical to peft's `nn.Linear(in_features, r).weight`. Session 3's weight
+  transplant is therefore a bare `.copy_()` with no transpose, and `kaiming_uniform_(a=sqrt(5))`
+  computes the same fan_in peft does, so even the init distributions match. **Do not "simplify"
+  these shapes.** *(Confirmed correct in Session 3 — see below.)*
+- **Dimensions read from `.in_features` / `.out_features`, never `.weight.shape`** — under
+  bitsandbytes 4-bit the weight is packed and its shape lies.
+- **Dtype resolved as `dtype or getattr(base_layer, "compute_dtype", base_layer.weight.dtype)`** —
+  `Linear4bit` exposes `compute_dtype`, plain `nn.Linear` doesn't. One expression covers both the
+  Week 1 fp32 path and the Week 2 4-bit path with no special-casing at the call site.
+- **Forward keeps explicit parentheses:** `(h @ lora_A.T) @ lora_B.T`. The other grouping
+  materialises an `out_features × in_features` matrix — exactly what LoRA exists to avoid.
+- **Exact name matching in injection**, not substring. `"up_proj" in "gate_up_proj"` is `True`,
+  which would silently wrap the wrong layer on any architecture with fused projections. Qwen2.5
+  has no fused names, but exact matching converts a future silent wrong-wrap into a loud zero-wrap.
+- **Two-pass injection:** collect `(parent, child_name, child)` triples first, then `setattr`.
+  Mutating the module tree while iterating it is fragile.
+- **Zero-wrap raises `ValueError`** listing both the requested targets and a sample of the
+  `nn.Linear` child names actually present — this failure is always a typo, so the error
+  diagnoses itself.
+ 
+### The test suite (`tests/test_lora_injection.py`, 10 cases)
+ 
+Module-scoped fixture loads Qwen2.5-0.5B-Instruct in **fp32 on CUDA** and stays pristine;
+each test that injects works on a `copy.deepcopy`, since injection is in-place. CUDA absence
+is an `assert`, not a `pytest.skip` — on a single-GPU dev machine a missing GPU is a broken
+environment, and silent skips are the failure mode this suite exists to prevent.
+ 
+1. **Wrap count** — exact, parametrized over three target sets. Catches over-wrapping as well as under-wrapping.
+2. **Param count** — exact, same parametrization. Matches the hand-computed table below.
+3. **Bit-identical at init** — base logits captured from the pristine fixture *before* any
+   injection, then `torch.equal` (not `allclose`). With `B = 0` the update is exactly `0.0`,
+   so this must hold bitwise.
+4. **Freeze check** — `trainable == lora > 0`, plus a name-level assertion that every
+   `requires_grad` parameter contains `lora_`, reporting *which* one leaked on failure.
+5. **Device/dtype placement** — per-`LoRALinear`, and asserts at least one was checked.
+6. **Scaling** — `alpha/r == 2.0` for r=8/alpha=16. No GPU. Catches an alpha/r inversion that
+   would otherwise surface as a mystifying Session 3 failure.
+ 
+### Precomputed parameter counts for Qwen2.5-0.5B (r=8) — verified by tests 1 & 2
+ 
+Formula: `r × (in_features + out_features)` per wrapped layer, × 24 layers.
+ 
+| Target set | Wrapped layers | Per layer | Total |
+|---|---|---|---|
+| `q_proj`, `v_proj` | 48 | 22,528 | **540,672** |
+| attention (`q`,`k`,`v`,`o`) | 96 | 45,056 | **1,081,344** |
+| all seven | 168 | 183,296 | **4,399,104** |
+ 
+Scales linearly for r=4 and r=16.
+ 
+**Notable:** the three MLP projections account for 138,240 of the 183,296 per-layer total —
+**75% of LoRA parameters live in the MLP**, because 4,864 is a much fatter dimension than 896.
+This motivates the target-set ablation.
+ 
+## Session 3 — COMPLETE (the `peft` parity test — the actual resume claim)
+ 
+`tests/test_lora_parity.py` implemented and committed. **`pytest -v` → 18 passed** (10 injection
++ 8 parity). This is the correctness proof the whole project is pitched on.
+ 
+**What the test does.** Builds a matched peft model (`LoraConfig` with the same r, alpha,
+target modules, `lora_dropout=0.0`, `use_rslora=False`), randomizes peft's `lora_B`, transplants
+**both** adapter matrices into our `LoRALinear` with a bare `.copy_()` (no transpose), then asserts:
+ 
+- **Forward:** `torch.allclose(atol=1e-6)` on logits, in fp32, on a shared batch.
+- **Backward:** one shared seeded target, `.mean()` MSE loss on both models, then
+  `torch.allclose(atol=1e-6)` on **both** `lora_A.grad` and `lora_B.grad`, per paired layer.
+ 
+Parametrized over **r ∈ {4, 8, 16}** on q/v, plus an **all-seven** spot check (confirms the GQA
+k/v `out_features` asymmetry and the fat MLP dims all transplant correctly). Empirically the
+agreement is *bit-identical* in fp32 on a toy verification (maxdiff `0.00e+00`), so `atol=1e-6`
+passes with room to spare — the parity is proven, not merely "close."
+ 
+### Two facts pinned this session (verified against real peft output, not from memory)
+ 
+- **peft's `scaling` is a dict**, `{"default": alpha/r}`, not a scalar. Index `["default"]` if it
+  ever needs reading. We recompute `alpha/r` ourselves so we don't depend on it — but don't assume
+  it's scalar.
+- **Both implementations init `lora_B = 0`.** A naive parity comparison at init is therefore
+  *vacuously* true (`base == base`) and proves nothing. peft's `lora_B` **must be randomized
+  before transplant**. This also matters for backward: with `B = 0`, `dL/dA = 0`, so the
+  `lora_A.grad` assertion would be vacuous too.
+- **Shape convention confirmed correct.** peft's `lora_A["default"].weight` is `(r, in_features)`
+  and `lora_B["default"].weight` is `(out_features, r)` — identical to `LoRALinear`. Transplant is
+  a bare `.copy_()`, no transpose, exactly as designed in Session 2.
+ 
+### peft attribute map (recorded for future reference)
+ 
+- peft LoRA layers are `peft.tuners.lora.Linear`, found via `named_modules()`.
+- Named `base_model.model.<original_qualified_name>`, so
+  `name.removeprefix("base_model.model.")` pairs them to our `LoRALinear` (which keeps the wrapped
+  layer's original qualified name after `setattr`).
+- Adapter weights: `layer.lora_A["default"].weight` / `layer.lora_B["default"].weight`;
+  gradients at `.grad` on those tensors.
+ 
+### Housekeeping follow-up — DONE
+ 
+The three shared fixtures were duplicated across `test_lora_injection.py` and
+`test_lora_parity.py`; both are now extracted into `tests/conftest.py`, so the 0.5B loads once
+for the whole suite. `base_model_and_tokenizer` and `batch` are **session-scoped**; `fresh_model`
+was converted to a **factory fixture** (returns a callable — tests call `fresh_model()` for a
+fresh deepcopy per test), which is the pytest-idiomatic form and removes the non-idiomatic
+`from conftest import fresh_model`. Session scope is safe because every injection runs on a
+`fresh_model()` deepcopy and `test_bit_identical_at_init` only reads the base under `no_grad`.
+Pure refactor, still **18 tests green**. Committed separately from the parity test.
+ 
+## Session 4 — COMPLETE (`data.py` + toy training figure)
+ 
+Two committed halves. **`pytest -v` → 22 passed** (18 prior + 4 new data tests).
+ 
+**Coder-7B download verified first (closes OPEN ITEM #1).** Config smoke test with
+`HF_HUB_OFFLINE=1` confirms `Qwen2ForCausalLM`, **28 layers, hidden 3584, 28 query / 4 KV heads (GQA).** Vocab: config.vocab_size = 152064 (embedding/logit width); len(tokenizer) = 151665; tokenizer.vocab_size = 151643 (base vocab only — this was the number previously recorded as “vocab”). tie_word_embeddings = False — embed_tokens and lm_head are separate ≈1.09 GB bf16 tensors each., eos `<|im_end|>`, pad `<|endoftext|>`. 4 safetensor shards,
+~15.2 GB total (4.88 + 4.93 + 4.33 + 1.09 GB). Ready for Week 2 QLoRA. The GQA asymmetry
+(28 q vs 4 kv) is the same shape `LoRALinear` already handles on the 0.5B fixture.
+ 
+**Half 1 — `src/lora_sql/data.py` + `tests/test_data.py` (committed).** Implements the
+`runner.py` contract: `Example` (now carrying a `schema` field alongside `db_id`/`question`/
+`query`), `render_schema`, `format_prompt`, `load_examples`.
+ 
+- **Schema-in-prompt design chosen** (over question-only): `format_prompt` is the shared
+  train+eval contract reused in Week 2, so it renders the DB schema as CREATE TABLE DDL —
+  columns + types (`number→INTEGER, text→TEXT, time→TIME, boolean→BOOLEAN, else→TEXT`),
+  `PRIMARY KEY (...)`, and `FOREIGN KEY (...) REFERENCES ...`, skipping the `-1 *` wildcard
+  column. Identifiers with spaces/non-word chars are double-quoted (`"Home Town"`).
+- `render_schema(table_entry)` takes the whole `tables.json` entry (public, not underscored)
+  so the golden test calls it directly on real data — no fixture file. Schema is cached
+  per-`db_id` inside each `load_examples` call (many examples share a db).
+- `format_prompt` receives **no tokenizer** and its output goes straight to `tokenizer(prompt)`
+  — so **no `apply_chat_template`, no ChatML**. Plain instruction text; ChatML deferred to
+  Week 2 (which owns its own training path and can reach the template).
+- **4 tests:** golden-string equality of `render_schema("perpetrator")` byte-for-byte;
+  `format_prompt` contains schema+question, excludes the query, ends with `SQL: `;
+  `load_examples` maps fields correctly and the per-db cache is *shared* (`is` identity, not
+  just equal strings); default sibling-`tables.json` path resolution (what `runner.py`'s
+  single-positional-arg call depends on).
+ 
+**Half 2 — `scripts/toy_train.py` + `scripts/plot_toy.py` (committed, then run).** Toy loop:
+ours (`inject_lora`) vs peft (`get_peft_model`), Qwen2.5-0.5B fixture, fp32, bs=1, 200 steps,
+AdamW(lr=2e-4), one pass over the first 200 `train_spider.json` rows. Both runs start from an
+**identical `lora_A` snapshot** taken from a peft model (built, snapshotted, deleted before
+training), with `lora_B=0` on both (NOT randomized — that was the parity-test-only trick;
+real training needs `lora_B=0`). Base stays on CPU; each run `deepcopy`s it and moves only the
+copy to CUDA, sequential with `empty_cache` between — one ~2 GB model resident at a time.
+Loss via HF's built-in masked shifted CE so the loss math is identical across impls. matplotlib
+added to `requirements.txt`.
+ 
+**Result — the supporting figure is earned.** Loss descends 2.07 → ~0.2 over 200 steps, and
+every printed step is identical across ours and peft (`2.0694`, `1.3771`, `0.2335`, …).
+**`max per-step |loss_ours − loss_peft| = 0.000000`** — bit-identical training trajectories.
+This is Session 3's 1e-6 forward/backward parity shown as a training curve, on the same fixture.
+Artifacts committed: `results/toy_loss_curves.png`, `results/toy_loss_ours.json`,
+`results/toy_loss_peft.json`.
+ 
+**Writeup caption (drafted):** *"200-step LoRA training on Qwen2.5-0.5B, from-scratch vs peft,
+identical init/data/seed — max per-step loss divergence 0.0. The parity of the 1e-6
+forward/backward proof, shown as a training trajectory."* Lead the caption with the `0.000000`.
+ 
+**Masking trap — downgraded.** The "pad==eos masking" trap flagged for the toy loop does not
+bite on Qwen2.5: pad `<|endoftext|>` and eos `<|im_end|>` are **distinct token IDs**, so
+pad-masking never clobbers a learned eos, and the toy loop is bs=1 (no padding) regardless.
+Downgraded from live bug to: **add `assert pad_id != eos_id` when batching starts in Week 2.**
+ 
+---
+ 
+# DECISIONS MADE
+ 
+**transformers: staying on 5.14.1 — CLOSED (Session 2).** Earlier leaning was to pin to 4.x;
+reversed. Reasons: peft ≥ 0.18.0 is required for v5 compatibility and 0.19.1 is already installed,
+so downgrading transformers would produce an *untested* combination rather than a safer one;
+4.x is now the deprecated line; torch 2.5.1 satisfies v5's requirements; TRL/Unsloth/Axolotl all
+maintain v5 compatibility. The translation cost is bounded and enumerated: `dtype=` not
+`torch_dtype=`, `apply_chat_template` returns a `BatchEncoding` (`.to(device)` +
+`generate(**inputs)`). Pinned explicitly in `requirements.txt` so `pip install -r` can't drift.
+ 
+**Week 2 training loop: custom, not TRL's `SFTTrainer` — decided Session 2.** Roughly 60 lines
+(AdamW, gradient accumulation, cosine schedule, bf16 autocast). Removes almost all remaining
+version-coupling surface, and "I wrote the training loop" reads better on a project whose pitch
+is *from scratch*.
+ 
+**Precision split: parity in fp32, training in bf16 — decided Session 2.** bf16 carries ~3
+significant decimal digits, so two mathematically identical implementations that accumulate in a
+different order disagree around 1e-2. `atol=1e-6` is physically unreachable in bf16 regardless of
+correctness. The 0.5B in fp32 is ~2 GB, comfortable on the 4060. **State this explicitly in the
+writeup** — it's a point in favour, not a caveat. *(Vindicated in Session 3: fp32 parity is
+bit-identical.)*
+ 
+**Week 1 validation model: Qwen2.5-0.5B-Instruct** (locked). Chosen over Gemma-2B because
+its module names (`q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`)
+are *identical* to Qwen2.5-Coder-7B, so `inject_lora` target strings transfer verbatim with
+zero edits. It also uses GQA, so `k_proj`/`v_proj` have much smaller `out_features` than
+`q_proj` — a real shape asymmetry the `LoRALinear` must handle correctly, and one the 7B
+shares. **This model is a parity fixture only. It is never fine-tuned.**
+ 
+**Base model (Week 2 QLoRA target): Qwen2.5-Coder-7B-Instruct.** Code-specialized
+pretraining gives a much stronger out-of-the-box SQL baseline than a general model like
+Llama-3.1-8B-Instruct. Dense — no MoE routing complexity like the newer Qwen3-Coder line, whose
+smallest variant jumps to a 30B MoE, too heavy for local QLoRA on 8GB. Apache 2.0, well supported
+by standard LoRA/QLoRA tooling.
+ 
+**Dataset: Spider (train + primary eval), BIRD-dev as a held-out generalization test.**
+Spider's difficulty tiers map directly to the Week 3 breakdown, and its ~200 databases are a
+manageable footprint for local execution-based eval. BIRD is harder and more realistic (noisy
+real-world values, external-knowledge reasoning) — running the Spider-fine-tuned model zero-shot
+against BIRD-dev tests generalization to an unseen, harder benchmark, a stronger claim than
+in-distribution accuracy alone. WikiSQL skipped (mostly single-table, minimal joins). A custom
+schema stays in scope as a qualitative bonus demo for the writeup, not as a quantitative
+benchmark — self-authored eval sets are easy for a reviewer to be skeptical of.
+ 
+**Spider splits — strict discipline:**
+ 
+- `train_spider.json` → training only
+- `dev.json` → the *only* in-distribution eval set, used throughout (keeps numbers
+  comparable to published work, which is all dev-column)
+- `test.json` / `test_database/` → **do not touch.** Publicly released Feb 2024 and ships in the
+  download, but using it for tuning would destroy its value. Reserved at most for a single final
+  sanity check after all decisions are frozen.
+- BIRD-dev → zero-shot only, never trained on
+ 
+**HF `xlangai/spider` is NOT usable for this project.** ~960 KB of text pairs only
+(`db_id`, `query`, `question`, tokens). No SQLite files → no execution-based eval. No
+`tables.json` → no schema to put in the prompt. The official Google Drive release is
+required. (Reconstructing empty DBs from schema is a trap: every query returns an empty
+set, so every query "matches.")
+ 
+## Scope cuts (forced by the ~40 hour budget)
+ 
+- ❌ **DoRA** — nice-to-have, requires a whole second implementation.
+- ❌ **RAG baseline** — already on my resume from Fusemachines; adds nothing new, costs real infra time.
+- ✅ **Kept: rank ablation** (r = 4/8/16) — same script three times, mostly unattended GPU hours.
+- ✅ **Kept: BIRD-dev zero-shot** — cheap once the harness exists, and the strongest single claim.
+- ✅ **Added: target-set ablation** — q/v vs. full attention vs. all-seven. "Does targeting the MLP
+  justify 4× the adapter size" is a more interesting question than rank alone.
+ 
+## Corrections to earlier assumptions
+ 
+**1. Spider does NOT ship difficulty tiers as a data field.** No `difficulty` key in `dev.json`.
+The tiers are **computed** by `eval_hardness()` in `evaluation.py` from the
+[taoyds/spider](https://github.com/taoyds/spider) repo, which parses each gold SQL and counts
+components (joins, nesting, aggregates, `GROUP BY`). Consequence: `process_sql.py` from that repo
+is a dependency of the Week 3 difficulty breakdown. `metrics.py` currently defaults `difficulty`
+to `"unknown"` — this is the gap to fill.
+ 
+**2. `bnb.nn.Linear4bit` IS a subclass of `nn.Linear`** (verified: `isinstance` → `True`). An
+earlier assumption that it wasn't turned out to be wrong. Good news — `inject_lora`'s
+`isinstance(child, nn.Linear)` filter will correctly find quantized projections in Week 2.
+The *real* `Linear4bit` gotchas are different:
+ 
+- `weight.shape` reports **packed** dimensions (a 64×64 layer shows `(2048, 1)` — 4,096
+  weights at 4 bits = 2,048 bytes). Read `in_features` / `out_features` attributes instead.
+- `lora_A` / `lora_B` must be created in the **compute dtype** (bf16), not the packed storage
+  dtype. Handled by the `compute_dtype` resolution in `LoRALinear.__init__`.
+ 
+**3. Official Spider metric is Test Suite Accuracy**, not plain execution accuracy — separate
+codebase at [taoyds/test-suite-sql-eval](https://github.com/taoyds/test-suite-sql-eval). Worth
+citing in the writeup to show awareness of the standard even while implementing single-DB
+execution accuracy myself.
+ 
+**4. Claude Code's `/init` output is not trustworthy as written.** The generated `CLAUDE.md`
+contained two real errors: it described the project as fine-tuning the 0.5B (wrong model role),
+and it listed `test_database/` as a legitimate execution target for scoring — directly
+contradicting the held-out rule. Both were corrected by hand. `/init` is a scaffolding tool;
+everything it asserts about *intent* needs review.
+ 
+**5. Claude's predictions about library behaviour need verification against actual output.**
+Two errors in Session 1 (the `Linear4bit` subclass question above, and a broken `gdown --fuzzy`
+command with the wrong URL type). Worth staying alert to.
+ 
+**6. peft internals confirmed empirically in Session 3.** Before writing the parity spec, peft's
+LoRA layer was introspected against real output rather than trusted from memory (per correction #5).
+Result: `lora_A["default"].weight` is `(r, in_features)`, `lora_B["default"].weight` is
+`(out_features, r)` — transplant is a bare `.copy_()`, no transpose. `scaling` is a **dict**
+`{"default": alpha/r}`, not a scalar. Both sides init `lora_B = 0`, so peft's `lora_B` must be
+randomized before any comparison or the test is vacuous. All three matched the Session 2 design
+assumptions — but they were checked, not assumed.
+ 
+---
+ 
+# CLAUDE.md hard rules (repo root, loaded by every Claude Code session)
+ 
+Recorded here so they survive even if the file is regenerated:
+ 
+- `data/spider_data/test.json` and `test_database/` are **HELD OUT**. Never read, never evaluate
+  against, never tune on. `database/` is the only execution target.
+- Never use `base_layer.weight.shape` for layer dimensions — packed under `Linear4bit`.
+  Use `.in_features` / `.out_features`.
+- transformers is pinned to 5.14.1 (v5). Use `dtype=`, never `torch_dtype=`.
+- Parity tests run in fp32; training runs in bf16. Do not mix.
+- **peft `scaling` is a dict** `{"default": alpha/r}` — index `["default"]`, never assume it's a
+  scalar. (Session 3.)
+- **Parity / weight-transplant tests must randomize peft's `lora_B` before copying**, or the
+  comparison is vacuous (`base == base`) and `lora_A.grad` is zero. (Session 3.)
+- **LoRA checkpoints:** save only keys containing `lora_`, and after
+  `load_state_dict(..., strict=False)` assert `unexpected_keys == []` and that the expected LoRA
+  keys were actually consumed. `strict=False` silently loading *nothing* is a real failure mode
+  here — injection renames base params (`q_proj.weight` → `q_proj.base_layer.weight`), so a
+  prefix mismatch between the save side and the load side would evaluate the base model while
+  reporting success. This is the highest-value trap in the project.
+- Ablations are new files in `configs/`, never edited copies of `train.py`.
+- Model roles: 0.5B = parity fixture only; Coder-7B = the actual fine-tune target.
+- GPU is an RTX 4060 Laptop, 8.2 GB VRAM. Assume memory is tight.
+ 
+---
+ 
+# PLAN
+ 
+**Week 1 — LoRA from scratch** *(Sessions 1-4 — ALL DONE)*
+ 
+- ✅ Custom `LoRALinear` in raw PyTorch: frozen base weight, trainable low-rank A (r×d) and
+  B (d×r), scaled by alpha/r.
+- ✅ Wrap attention/MLP projections of Qwen2.5-0.5B-Instruct; injection tests green.
+- ✅ **Numerical parity vs. `peft`**: weight-transplant → forward `allclose` → backward `allclose`,
+  fp32, `atol=1e-6`, parametrized over r∈{4,8,16} + all-seven. **18 tests green.**
+- ✅ Loss-curve comparison (Session 4): ours vs peft, 200 steps, fp32, identical init/data.
+  **Max per-step loss δ = 0.000000** — bit-identical trajectories. Figure at
+  `results/toy_loss_curves.png`. **Week 1 is complete.**
+ 
+**Week 2 — QLoRA on the real task**
+ 
+- Base model: Qwen2.5-Coder-7B-Instruct, QLoRA (4-bit via `bitsandbytes`,
+  `bnb_4bit_compute_dtype=torch.bfloat16`) — fits the 8GB 4060 for iteration; cloud burst
+  for a bigger run if wanted.
+- Custom ~60-line training loop (see decision above).
+- Dataset: Spider training split. BIRD-dev reserved purely for Week 3.
+- `src/lora_sql/data.py` — ✅ **built in Session 4** (`Example`+`schema`, `render_schema`,
+  `format_prompt`, `load_examples`). Week 2's `train.py` reuses `format_prompt` and
+  `build_example`-style ID-level masking; ChatML via `apply_chat_template` is a Week 2 decision
+  (reachable here because Week 2 owns the training path, unlike the runner contract).
+ 
+**Week 3 — Evaluation harness — MOSTLY ALREADY BUILT**
+ 
+`src/lora_sql/eval/` is implemented as of Session 1:
+ 
+- `runner.py` — orchestration. Loads YAML config, loads base model + tokenizer, calls
+  `inject_lora`, optionally loads a LoRA checkpoint, generates greedily (`do_sample=False`),
+  writes `{"summary": ..., "results": [...]}` JSON.
+- `execute.py` — SQLite execution and comparison. `run_query` converts any `sqlite3.Error` into
+  `ExecutionError` so a broken generation is a scoring signal rather than a crash. `results_match`
+  does order-insensitive comparison with float rounding, matching Spider's convention.
+  `execute_and_compare` treats an unexecutable prediction as simply wrong.
+- `metrics.py` — aggregation over `EvalResult` into `MetricsSummary`; overall accuracy plus
+  breakdown by `difficulty`.
+ 
+**Remaining Week 3 work is therefore small:**
+ 
+- `configs/week1_parity.yaml` (empty placeholder). Needs `model.name_or_path`, `model.dtype`,
+  `lora.target_modules`, `lora.rank`, `lora.alpha`, `data.eval_path`, `data.db_dir`,
+  `eval.max_new_tokens`, `eval.results_path`. **`data.db_dir` must point at `database/`,
+  never `test_database/`** — this is where the held-out rule is actually enforced.
+- Wire `eval_hardness()` from taoyds/spider so `difficulty` stops defaulting to `"unknown"`.
+- BIRD-dev zero-shot run.
+- Comparison table: base model vs. mine vs. peft-fine-tuned sanity check.
+ 
+**Known issue to fix before Week 3 numbers mean anything:** `runner.py`'s `generate_sql` tokenizes
+the raw prompt directly rather than going through `apply_chat_template`. For an `-Instruct` model
+that omits the chat wrapper it was tuned on, which will depress SQL quality. Mechanical tests are
+unaffected; real eval numbers are not.
+ 
+**Week 4 — Polish**
+ 
+- Write up like a mini paper: motivation, method, results, ablations.
+- Ablations: rank (r = 4/8/16) **and** target set (q/v vs. attention vs. all-seven).
+- Clean GitHub repo, README, loss curve + eval score plots.
+ 
+---
+ 
+# REPO LAYOUT
+ 
+```
+SQL_Fine-Tune/
+├── CLAUDE.md               # Claude Code's context file — hard rules, model roles
+├── pyproject.toml          # ✅ setuptools backend + pytest config
+├── requirements.txt        # frozen; transformers pinned to 5.14.1
+├── .gitignore              # data/, runs/, .venv/
+├── configs/
+│   └── week1_parity.yaml   # ⬜ empty placeholder — needed for eval runner
+├── src/lora_sql/
+│   ├── lora.py             # ✅ LoRALinear, inject_lora, lora_param_stats
+│   ├── data.py             # ✅ Example+schema, render_schema, format_prompt, load_examples (S4)
+│   ├── train.py            # ⬜ empty placeholder — Week 2
+│   └── eval/
+│       ├── execute.py      # ✅ implemented
+│       ├── metrics.py      # ✅ implemented
+│       └── runner.py       # ✅ implemented
+├── scripts/
+│   ├── check_env.py                 # ✅ passing
+│   ├── check_spider_database.py     # ✅ passing
+│   ├── toy_train.py                 # ✅ S4 — ours vs peft toy loop (run; δ=0.0)
+│   └── plot_toy.py                  # ✅ S4 — loss-curve plot + max-δ report
+├── tests/
+│   ├── conftest.py                  # ✅ shared fixtures: session-scoped base, fresh_model factory
+│   ├── test_lora_injection.py       # ✅ 10 passed
+│   ├── test_lora_parity.py          # ✅ 8 passed (Session 3) — peft forward+backward parity
+│   └── test_data.py                 # ✅ 4 passed (Session 4) — schema/prompt/load_examples
+├── data/                   # gitignored — spider_data/ lives here
+├── runs/                   # gitignored — checkpoints, logs (+ toy_train.log)
+└── results/                # COMMITTED — eval JSONs, plots (toy_loss_*.json, toy_loss_curves.png)
+```
+ 
+Two choices that pay off later:
+ 
+**`configs/` as YAML, `train.py` takes a config path.** The ablations become N config files
+and N commands, not N edited copies of a script. This is the difference between the ablation
+being an afternoon and being "I ran out of time."
+ 
+**`runs/` ignored, `results/` committed.** Checkpoints are gigabytes of noise; eval JSONs and
+plots are the project. A reviewer cloning the repo should see the numbers without downloading
+weights.
+ 
+---
+ 
+# COMMANDS
+ 
+```bash
+source .venv/bin/activate
+ 
+python -c "import lora_sql; print('ok')"   # packaging gate
+python scripts/check_env.py
+python scripts/check_spider_database.py
+pytest -v                                   # 22 passing as of Session 4 (10 injection + 8 parity + 4 data)
+pytest -v tests/test_lora_parity.py         # just the parity suite
+ 
+# Session 4 toy training figure (run from repo root):
+python scripts/toy_train.py 2>&1 | tee runs/toy_train.log   # ours vs peft, ~mins on the 4060
+python scripts/plot_toy.py                                   # writes results/toy_loss_curves.png, prints max δ
+ 
+# once configs/week1_parity.yaml exists (data.py already done):
+python -m lora_sql.eval.runner --config configs/week1_parity.yaml
+```
+ 
+---
+ 
+# OPEN ITEMS
+ 
+1. ✅ **Qwen2.5-Coder-7B-Instruct download (~15 GB) — VERIFIED (Session 4).** Config smoke
+   test (`HF_HUB_OFFLINE=1`) confirmed `Qwen2ForCausalLM`, 28 layers, hidden 3584, 28 q / 4 kv
+   heads (GQA), 4 safetensor shards ≈15.2 GB, eos `<|im_end|>`, pad `<|endoftext|>`. Ready for
+   Week 2 QLoRA.
+2. ✅ **`data.py` — DONE (Session 4).** `Example`+`schema`, `render_schema`, `format_prompt`,
+   `load_examples`; 4 tests green. Eval runner is now executable end-to-end once the config
+   YAML exists (item 3).
+3. **`configs/week1_parity.yaml`** — still an empty placeholder. `data.db_dir` must point at
+   `database/`, never `test_database/`. This is now the only remaining blocker to running the
+   eval harness end-to-end.
+4. **`apply_chat_template` in `runner.py`** — fix before Week 3 numbers are meaningful.
+5. **Eval-harness hardening — before any real eval run (Week 3), none can bite until then.**
+   Reviewed the `eval/` package in a Session 3 tail; three real issues, all latent because no
+   checkpoint/generation/execution happens before Week 3:
+   - **`runner.py` checkpoint load is unguarded** — `model.load_state_dict(state, strict=False)`
+     throws away the return. This is the exact CLAUDE.md "highest-value trap": a prefix mismatch
+     makes `strict=False` load *nothing*, leaving `lora_B` at zero-init (adapter is a no-op) while
+     eval reports success on the untrained base. Capture the result, assert
+     `unexpected_keys == []`, and assert the checkpoint keys are a subset of the model's `lora_`
+     params (i.e. they actually mapped on).
+   - **`execute.py` opens DBs read-write** — generated SQL runs against the real
+     `database/*.sqlite` with write access, so a generated `DROP`/`DELETE` could persist and
+     silently corrupt the eval set. Open read-only:
+     `sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=timeout)`. A generated write
+     then correctly raises → `ExecutionError` → scored wrong.
+   - **`results_match` crashes on NULLs** — `sorted()` compares tuples element-wise, and
+     `None < number` raises `TypeError`, which nothing catches (the `try/except ExecutionError`
+     only wraps the *predicted* query). Spider result sets contain NULLs routinely. Replace with a
+     multiset compare: `Counter(map(_normalize_row, predicted)) == Counter(map(_normalize_row, gold))`
+     — order-insensitive, duplicate-sensitive, no element comparison.
+   - Minor: `run_query` leaks the connection on a failed query (raises before `conn.close()` —
+     use `try/finally`); gold execution is unguarded (a failing gold query kills the run).
+   - Forward-looking: `load_model_for_eval` has **no 4-bit path**, so Week 3 eval of the
+     fine-tuned Coder-7B won't fit in bf16 on the 8 GB 4060 — needs a `bnb` quantization branch.
+   - Reminder: wiring `eval_hardness()` is a **two-place** change — compute difficulty *and*
+     thread it into the `EvalResult(...)` construction in `runner.py` (currently omitted, so
+     `difficulty` always defaults to `"unknown"`).
+ 
+*(Done since last README: `tests/conftest.py` fixture extraction + `fresh_model` factory — see
+Session 3 housekeeping note above.)*
+ 
+# WHAT I WANT HELP WITH NEXT
+ 
+**Week 1 is fully complete** (LoRALinear + injection + 1e-6 parity + bit-identical training
+curve). Session 5 opens **Week 2 — QLoRA fine-tuning on Coder-7B.**
+ 
+**Session 5 agenda (to design):**
+ 
+1. **`src/lora_sql/train.py`** — the ~60-line custom loop (AdamW, gradient accumulation, cosine
+   schedule, bf16 autocast), config-driven so ablations are N YAML files not N scripts. Reuses
+   `format_prompt` and the ID-level completion+eos masking from Session 4's `build_example`.
+2. **QLoRA setup** — Coder-7B in 4-bit (`bnb_4bit_compute_dtype=torch.bfloat16`) on the 8.2 GB
+   4060. `LoRALinear`'s `compute_dtype` resolution already handles the 4-bit path.
+3. **ChatML** — now reachable, since `train.py` owns its own tokenization (unlike the
+   `runner.py` contract). Apply the chat template at train time; keep it consistent with eval.
+4. **Batching guard** — when the loop moves past bs=1, add `assert pad_id != eos_id` (the
+   downgraded masking trap).
+ 
+**Before any real Week 3 eval numbers** (not blocking Session 5, but queued): the `runner.py`
+`apply_chat_template` fix (OPEN ITEM #4) and the eval-harness hardening (OPEN ITEM #5 —
+unguarded checkpoint load, read-write DB open, NULL-crashing `results_match`).
+ 
+First step of Session 5: decide the `train.py` config schema and the checkpoint save/load key
+convention (the "highest-value trap" — save only `lora_` keys, assert they map on load).
