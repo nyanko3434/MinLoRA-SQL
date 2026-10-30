@@ -13,6 +13,9 @@ PROMPT_TEMPLATE = """You are a SQLite expert. Given the database schema below, w
 Question: {question}
 SQL: """
 
+# Must not be a substring of PROMPT_TEMPLATE, so the rendered prompt carries it exactly once.
+SYSTEM_PROMPT = "You are a SQLite expert; respond with only the SQL query, with no explanation or formatting."
+
 
 @dataclass
 class Example:
@@ -69,6 +72,38 @@ def render_schema(table_entry: dict) -> str:
 
 def format_prompt(example: Example) -> str:
     return PROMPT_TEMPLATE.format(schema=example.schema, question=example.question)
+
+
+def encode_prompt(tokenizer, example: Example) -> list[int]:
+    """ChatML prompt ids ending at the assistant header. The ONLY place prompt ids are built:
+    training and eval both call this, so the model never sees two different prompt formats.
+
+    The explicit system turn matters: without one, Qwen's template injects its own default
+    ("You are Qwen, created by Alibaba Cloud...").
+    """
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": format_prompt(example)},
+    ]
+    # transformers v5 returns a BatchEncoding here, not a bare list of ids.
+    enc = tokenizer.apply_chat_template(
+        messages, add_generation_prompt=True, tokenize=True, return_dict=True
+    )
+    return list(enc["input_ids"])
+
+
+def build_train_example(tokenizer, example: Example) -> tuple[list[int], int]:
+    """Training ids = prompt ids + SQL ids + <|im_end|>, and n_completion, the length of the
+    trailing slice that carries loss (the SQL plus <|im_end|>)."""
+    im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    assert im_end_id == tokenizer.eos_token_id, (
+        f"<|im_end|> ({im_end_id}) is not the tokenizer's eos ({tokenizer.eos_token_id}); "
+        "generation would not stop where training taught it to"
+    )
+    # Concatenate at the ID level; never re-tokenize a joined prompt+SQL string, which can
+    # merge tokens across the boundary.
+    completion_ids = tokenizer(example.query, add_special_tokens=False).input_ids + [im_end_id]
+    return encode_prompt(tokenizer, example) + completion_ids, len(completion_ids)
 
 
 def load_examples(path: str, tables_path: str | None = None) -> list[Example]:

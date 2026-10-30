@@ -10,10 +10,23 @@ names like "Home Town"), so no synthetic fixture is needed for that test.
 import json
 from pathlib import Path
 
-from lora_sql.data import Example, format_prompt, load_examples, render_schema
+import pytest
+from transformers import AutoTokenizer
+
+from lora_sql.data import (
+    SYSTEM_PROMPT,
+    Example,
+    build_train_example,
+    encode_prompt,
+    format_prompt,
+    load_examples,
+    render_schema,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TABLES_PATH = REPO_ROOT / "data" / "spider_data" / "tables.json"
+CODER_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"
+IM_END_ID = 151645
 
 GOLDEN_PERPETRATOR_SCHEMA = """CREATE TABLE perpetrator (
   Perpetrator_ID INTEGER,
@@ -125,3 +138,64 @@ def test_load_examples_default_tables_path_resolves_sibling_tables_json(tmp_path
     assert "CREATE TABLE widget (" in examples[0].schema
     assert "id INTEGER" in examples[0].schema
     assert "PRIMARY KEY (id)" in examples[0].schema
+
+
+@pytest.fixture(scope="module")
+def coder_tokenizer():
+    # local_files_only is the in-code equivalent of HF_HUB_OFFLINE=1 (which can't be set
+    # reliably here: conftest has already imported transformers).
+    return AutoTokenizer.from_pretrained(CODER_MODEL, local_files_only=True)
+
+
+def _perpetrator_example() -> Example:
+    return Example(
+        db_id="perpetrator",
+        question="How many perpetrators are there?",
+        query="SELECT count(*) FROM perpetrator",
+        schema=GOLDEN_PERPETRATOR_SCHEMA,
+    )
+
+
+def _department_management_example() -> Example:
+    # Real train_spider row; its irregular double spaces exercise the byte-exact round-trip.
+    return Example(
+        db_id="department_management",
+        question="How many heads of the departments are older than 56 ?",
+        query="SELECT count(*) FROM head WHERE age  >  56",
+        schema=render_schema(_load_table_entry("department_management")),
+    )
+
+
+def test_encode_prompt_renders_chatml_with_system_prompt(coder_tokenizer):
+    example = _perpetrator_example()
+    ids = encode_prompt(coder_tokenizer, example)
+    assert isinstance(ids, list) and all(isinstance(i, int) for i in ids)
+
+    text = coder_tokenizer.decode(ids)
+    assert text.startswith(f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n")
+    assert text.count(SYSTEM_PROMPT) == 1
+    assert format_prompt(example) in text
+    assert text.endswith("<|im_start|>assistant\n")
+    assert "You are Qwen" not in text, "the template's default system turn leaked in"
+
+
+@pytest.mark.parametrize(
+    "make_example",
+    [_perpetrator_example, _department_management_example],
+    ids=["perpetrator", "double-space"],
+)
+def test_build_train_example_layout(coder_tokenizer, make_example):
+    example = make_example()
+    ids, n_completion = build_train_example(coder_tokenizer, example)
+    prompt_ids = encode_prompt(coder_tokenizer, example)
+    sql_ids = coder_tokenizer(example.query, add_special_tokens=False).input_ids
+
+    assert ids[: len(prompt_ids)] == prompt_ids
+    assert ids[-1] == IM_END_ID
+    assert n_completion == len(sql_ids) + 1
+    assert len(ids) == len(prompt_ids) + n_completion
+    assert coder_tokenizer.decode(ids[-n_completion:-1]) == example.query
+
+
+def test_pad_and_eos_are_distinct(coder_tokenizer):
+    assert coder_tokenizer.pad_token_id != coder_tokenizer.eos_token_id

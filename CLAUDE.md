@@ -14,7 +14,7 @@ committed — `src/lora_sql/lora.py` (`LoRALinear`, `inject_lora`, `lora_param_s
 forward + backward numerical parity vs `peft`, fp32, atol=1e-6). Session 4 added `src/lora_sql/data.py`
 (`tests/test_data.py`, 4 passing) and a toy training loop whose loss curve is bit-identical to peft's
 (max per-step loss delta = 0.000000). `pyproject.toml` is configured (setuptools backend + pytest config).
-**`pytest -v` -> 32 passing** (10 injection + 8 parity + 4 data + 10 4-bit).
+**`pytest -v` -> 36 passing** (10 injection + 8 parity + 8 data + 10 4-bit).
 
 **Still empty placeholders**, committed on purpose so module paths and imports stay stable:
 `src/lora_sql/train.py`, `configs/week1_parity.yaml`. Downstream code already imports names these
@@ -25,9 +25,8 @@ must provide — treat them as the contract to implement, not a bug:
   `test_database/`** (held-out rule). This is the only remaining blocker to running the eval harness
   end-to-end.
 - `src/lora_sql/train.py` — the Week 2 custom training loop (Session 5). Gets prompt ids from
-  `data.encode_prompt` (ChatML + `SYSTEM_PROMPT`) and uses ID-level completion+eos masking
-  (`build_example`, moving from `scripts/toy_train.py` into `data.py` in Session 5 Half 1);
-  config-driven so ablations are N YAML files, not N edited scripts.
+  `data.encode_prompt` (ChatML + `SYSTEM_PROMPT`) and builds examples with
+  `data.build_train_example` (ID-level completion + `<|im_end|>`); config-driven so ablations are N YAML files, not N edited scripts.
 
 **Already implemented:** `src/lora_sql/lora.py`, `src/lora_sql/data.py`, `src/lora_sql/eval/`
 (runner.py, execute.py, metrics.py), all three test files, `pyproject.toml`, and the `scripts/`
@@ -38,26 +37,28 @@ keyword and assigns the result directly): `inject_lora(model, target_modules, ra
 -> model` (returns the model alone, not a tuple). It freezes the whole base model before wrapping.
 Do not change this signature without updating `runner.py`.
 
-## data.py contract (implemented Session 4 — do not change signatures without updating runner.py)
+## data.py contract (implemented Sessions 4–5 — do not change signatures without updating runner.py)
 
-`eval/runner.py` imports `Example`, `format_prompt`, `load_examples` from `lora_sql.data` and
+`eval/runner.py` imports `Example`, `encode_prompt`, `load_examples` from `lora_sql.data` and
 destructures `.db_id` / `.question` / `.query`. As built:
 - `Example` is a dataclass with `db_id`, `question`, `query`, and `schema` (the rendered DDL).
-- `format_prompt(example) -> str` — receives NO tokenizer; its output is fed straight to
-  `tokenizer(prompt)`. So NO `apply_chat_template` / NO ChatML at this layer. Renders schema
+- `format_prompt(example) -> str` — receives NO tokenizer; NO ChatML at this layer. Renders schema
   (CREATE TABLE DDL: columns+types, PRIMARY KEY, FOREIGN KEY, skipping the `-1 *` wildcard) then
-  the question, ending at `SQL: `. As of the Session 5 design it is the prompt *text* only, not
-  the source of prompt ids — see `encode_prompt` below.
+  the question, ending at `SQL: `. It is the user-turn *text* only, never tokenized directly —
+  `encode_prompt` wraps it.
 - `load_examples(path, tables_path=None) -> list[Example]` — single positional arg is what
   `runner.py` calls; `tables_path` defaults to `Path(path).parent / "tables.json"`. Schema is
   cached per-`db_id` inside each call.
 - `render_schema(table_entry) -> str` — public, takes a whole `tables.json` entry; golden-string
   tested byte-for-byte against the real `perpetrator` entry.
-- **Planned (Session 5 Half 1):** `encode_prompt` wraps the prompt in ChatML with an explicit
-  `SYSTEM_PROMPT` and is the single source of prompt ids for both train and eval;
-  `runner.generate_sql` switches to it instead of calling `tokenizer(prompt)` on raw text.
-  Training target is `encode_prompt(...) + query ids + eos`, built at the ID level (not string
-  concat).
+- `encode_prompt(tokenizer, example) -> list[int]` (Session 5) — ChatML `[system=SYSTEM_PROMPT,
+  user=format_prompt(example)]` with `add_generation_prompt=True`, normalized from the v5
+  `BatchEncoding` to `list[int]`. The single source of prompt ids for train AND eval;
+  `runner.generate_sql` uses it (with an explicit attention mask).
+- `build_train_example(tokenizer, example) -> (input_ids, n_completion)` (Session 5) —
+  `encode_prompt(...) + query ids + [<|im_end|>]`, concatenated at the ID level (never a re-tokenized
+  joined string); asserts `<|im_end|>` is the tokenizer's eos. The last `n_completion` ids carry loss.
+  `scripts/toy_train.py` keeps its own frozen `build_example` (it produced a committed figure).
 
 ## Environment & commands
 
@@ -84,7 +85,7 @@ python -m lora_sql.eval.runner --config configs/week1_parity.yaml
 python -m lora_sql.eval.runner --config configs/week1_parity.yaml --lora-checkpoint path/to/weights.pt
 
 # Tests: pytest is in requirements.txt and configured in pyproject.toml
-# (testpaths = ["tests"]). 32 passing as of Session 5 (10 injection + 8 parity + 4 data + 10 4-bit).
+# (testpaths = ["tests"]). 36 passing as of Session 5 (10 injection + 8 parity + 8 data + 10 4-bit).
 pytest -v
 pytest -v tests/test_lora_parity.py   # just the parity suite
 pytest -v -s tests/test_lora_4bit.py  # 4-bit unit + QLoRA parity vs peft; -s prints max abs diffs

@@ -349,6 +349,16 @@ Downgraded from live bug to: **add `assert pad_id != eos_id` when batching start
   - **Why the α=12 case:** at scaling = α/r = 2.0 the multiply is exact in bf16, so scaling before vs
     after the downcast can't be told apart — the pre-1a order still passes r8-qv. At scaling 1.5 the
     old order is off from peft by 0.32 in the logits; the new order is 0.0.
+- **1c — ChatML prompt contract (DONE, +4 tests in `test_data.py`).** `SYSTEM_PROMPT`,
+  `encode_prompt` (only source of prompt ids, train + eval), `build_train_example` (ID-level
+  prompt + SQL + `<|im_end|>`, returns `n_completion`); `runner.generate_sql` switched over (closes
+  OPEN ITEM #4).
+  - SQL tokenize→decode round-trips **byte-exact for all 8,659 training queries** (incl. Spider's
+    irregular double spaces); Coder-7B `clean_up_tokenization_spaces=False`.
+  - ID-level concat matched joined-string tokenization on 2,000/2,000 training examples checked —
+    we build at the ID level anyway. Longest prompt in that sample: 707 tokens.
+  - Smoke (0.5B, untrained, 2 dev examples): prompt ≈ 256 tokens, output is bare SQL — no prose or
+    code fences.
  
 ---
  
@@ -673,8 +683,8 @@ python -m lora_sql.eval.runner --config configs/week1_parity.yaml
 3. **`configs/week1_parity.yaml`** — still an empty placeholder. `data.db_dir` must point at
    `database/`, never `test_database/`. This is now the only remaining blocker to running the
    eval harness end-to-end.
-4. **ChatML in `runner.py`** — resolved by design (Session 5): `runner.generate_sql` switches to
-   `data.encode_prompt`. Closes once that lands in Session 5 Half 1.
+4. ✅ **ChatML in `runner.py` — CLOSED (Session 5, 1c).** `runner.generate_sql` builds inputs via
+   `data.encode_prompt` and passes an explicit attention mask.
 5. **Eval-harness hardening — before any real eval run (Week 3), none can bite until then.**
    Reviewed the `eval/` package in a Session 3 tail; three real issues, all latent because no
    checkpoint/generation/execution happens before Week 3:

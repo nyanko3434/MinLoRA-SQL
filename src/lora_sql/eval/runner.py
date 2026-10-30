@@ -12,7 +12,7 @@ import torch
 import yaml
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from lora_sql.data import Example, format_prompt, load_examples
+from lora_sql.data import Example, encode_prompt, load_examples
 from lora_sql.eval.execute import execute_and_compare
 from lora_sql.eval.metrics import EvalResult, compute_metrics
 from lora_sql.lora import inject_lora
@@ -46,15 +46,16 @@ def load_model_for_eval(cfg: dict, lora_checkpoint: str | None = None):
 
 @torch.no_grad()
 def generate_sql(model, tokenizer, example: Example, max_new_tokens: int, device: str) -> str:
-    prompt = format_prompt(example)
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    input_ids = torch.tensor([encode_prompt(tokenizer, example)], device=device)
+    attention_mask = torch.ones_like(input_ids)
     output_ids = model.generate(
-        **inputs,
+        input_ids=input_ids,
+        attention_mask=attention_mask,
         max_new_tokens=max_new_tokens,
         do_sample=False,
         pad_token_id=tokenizer.pad_token_id,
     )
-    generated = output_ids[0][inputs["input_ids"].shape[1]:]
+    generated = output_ids[0][input_ids.shape[1]:]
     return tokenizer.decode(generated, skip_special_tokens=True).strip()
 
 
