@@ -16,7 +16,7 @@ class LoRALinear(nn.Module):
         alpha: int = 16,
         dropout: float = 0.0,
         device=None,
-        dtype=None,
+        adapter_dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
         for p in base_layer.parameters():
@@ -28,14 +28,15 @@ class LoRALinear(nn.Module):
         in_features = base_layer.in_features
         out_features = base_layer.out_features
 
-        dtype = dtype or getattr(base_layer, "compute_dtype", base_layer.weight.dtype)
+        # Adapters default to fp32 regardless of the base's compute dtype, matching peft's
+        # autocast_adapter_dtype=True: pure-bf16 adapters lose small AdamW updates to rounding.
         device = device or base_layer.weight.device
 
         # Shapes match peft's nn.Linear(in_features, r) / nn.Linear(r, out_features)
         # storage convention exactly, so checkpoint weights can be copied with no transpose.
-        self.lora_A = nn.Parameter(torch.empty(r, in_features, device=device, dtype=dtype))
+        self.lora_A = nn.Parameter(torch.empty(r, in_features, device=device, dtype=adapter_dtype))
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
-        self.lora_B = nn.Parameter(torch.zeros(out_features, r, device=device, dtype=dtype))
+        self.lora_B = nn.Parameter(torch.zeros(out_features, r, device=device, dtype=adapter_dtype))
 
         self.lora_dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.r = r
@@ -44,11 +45,13 @@ class LoRALinear(nn.Module):
 
     def forward(self, x):
         base_out = self.base_layer(x)
-        h = self.lora_dropout(x).to(self.lora_A.dtype)
+        # Mirror peft's bnb Linear4bit order: cast x to the adapter dtype *before* dropout, and
+        # apply scaling in the adapter dtype *before* casting down to the base output dtype.
+        h = self.lora_dropout(x.to(self.lora_A.dtype))
         # Keep the matmuls grouped this way: the other grouping materializes an
         # (out_features x in_features) matrix, exactly what LoRA exists to avoid.
-        lora_out = (h @ self.lora_A.T) @ self.lora_B.T
-        return base_out + self.scaling * lora_out.to(base_out.dtype)
+        lora_out = ((h @ self.lora_A.T) @ self.lora_B.T) * self.scaling
+        return base_out + lora_out.to(base_out.dtype)
 
     def extra_repr(self) -> str:
         return f"r={self.r}, alpha={self.alpha}, scaling={self.scaling}"
@@ -60,6 +63,7 @@ def inject_lora(
     rank: int = 8,
     alpha: int = 16,
     dropout: float = 0.0,
+    adapter_dtype: torch.dtype = torch.float32,
 ) -> nn.Module:
     """Replace nn.Linear children named in target_modules with LoRALinear wrappers, in place."""
     # Freeze the whole model up front. LoRALinear only freezes the base_layer it wraps, so
@@ -86,7 +90,11 @@ def inject_lora(
 
     # Mutate only after the full walk above; mutating the tree mid-iteration is fragile.
     for parent, child_name, child in candidates:
-        setattr(parent, child_name, LoRALinear(child, r=rank, alpha=alpha, dropout=dropout))
+        setattr(
+            parent,
+            child_name,
+            LoRALinear(child, r=rank, alpha=alpha, dropout=dropout, adapter_dtype=adapter_dtype),
+        )
 
     return model
 

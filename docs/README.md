@@ -160,9 +160,11 @@ not by inspection — the test paid for itself immediately.)
   these shapes.** *(Confirmed correct in Session 3 — see below.)*
 - **Dimensions read from `.in_features` / `.out_features`, never `.weight.shape`** — under
   bitsandbytes 4-bit the weight is packed and its shape lies.
-- **Dtype resolved as `dtype or getattr(base_layer, "compute_dtype", base_layer.weight.dtype)`** —
-  `Linear4bit` exposes `compute_dtype`, plain `nn.Linear` doesn't. One expression covers both the
-  Week 1 fp32 path and the Week 2 4-bit path with no special-casing at the call site.
+- **Adapters held in `adapter_dtype` (default fp32), independent of the base dtype** *(changed
+  Session 5; originally resolved from the base's `compute_dtype`)* — matches peft's
+  `autocast_adapter_dtype=True`. Forward mirrors peft's bnb `Linear4bit` cast order: `x` cast to the
+  adapter dtype *before* dropout, `scaling` applied in fp32 *before* casting down to the base output
+  dtype. On the Week 1 fp32 fixture every cast is a no-op, so parity is unaffected.
 - **Forward keeps explicit parentheses:** `(h @ lora_A.T) @ lora_B.T`. The other grouping
   materialises an `out_features × in_features` matrix — exactly what LoRA exists to avoid.
 - **Exact name matching in injection**, not substring. `"up_proj" in "gate_up_proj"` is `True`,
@@ -448,8 +450,9 @@ The *real* `Linear4bit` gotchas are different:
  
 - `weight.shape` reports **packed** dimensions (a 64×64 layer shows `(2048, 1)` — 4,096
   weights at 4 bits = 2,048 bytes). Read `in_features` / `out_features` attributes instead.
-- `lora_A` / `lora_B` must be created in the **compute dtype** (bf16), not the packed storage
-  dtype. Handled by the `compute_dtype` resolution in `LoRALinear.__init__`.
+- `lora_A` / `lora_B` must not be created in the packed storage dtype (`uint8`). *(Superseded
+  Session 5:)* they are created in **fp32** via `adapter_dtype`, not the bf16 compute dtype —
+  peft does the same (`autocast_adapter_dtype=True`), and bf16 adapters lose small AdamW updates.
  
 **3. Official Spider metric is Test Suite Accuracy**, not plain execution accuracy — separate
 codebase at [taoyds/test-suite-sql-eval](https://github.com/taoyds/test-suite-sql-eval). Worth

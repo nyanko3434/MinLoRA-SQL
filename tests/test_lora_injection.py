@@ -71,9 +71,10 @@ def test_device_dtype_placement(fresh_model):
     for m in model.modules():
         if isinstance(m, LoRALinear):
             checked += 1
-            expected_dtype = getattr(m.base_layer, "compute_dtype", m.base_layer.weight.dtype)
-            assert m.lora_A.device == m.base_layer.weight.device
-            assert m.lora_A.dtype == expected_dtype
+            # Adapters are fp32 regardless of base dtype (peft's autocast_adapter_dtype=True).
+            for adapter in (m.lora_A, m.lora_B):
+                assert adapter.device == m.base_layer.weight.device
+                assert adapter.dtype == torch.float32
 
     assert checked > 0
 
