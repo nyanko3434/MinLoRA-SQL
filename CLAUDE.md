@@ -14,7 +14,11 @@ committed — `src/lora_sql/lora.py` (`LoRALinear`, `inject_lora`, `lora_param_s
 forward + backward numerical parity vs `peft`, fp32, atol=1e-6). Session 4 added `src/lora_sql/data.py`
 (`tests/test_data.py`, 4 passing) and a toy training loop whose loss curve is bit-identical to peft's
 (max per-step loss delta = 0.000000). `pyproject.toml` is configured (setuptools backend + pytest config).
-**`pytest -v` -> 36 passing** (10 injection + 8 parity + 8 data + 10 4-bit).
+Session 5 Half 1 added fp32 adapters + 4-bit parity (`tests/test_lora_4bit.py`), the ChatML prompt
+contract (`data.encode_prompt` / `build_train_example`), `src/lora_sql/config.py` (strict train
+config, `configs/train/*.yaml`), `src/lora_sql/qlora.py` (`load_model`, `prepare_for_training`,
+`assert_training_dtypes`, `completion_loss`) and `scripts/probe_memory.py`.
+**`pytest -v` -> 54 passing** (10 injection + 8 parity + 8 data + 10 4-bit + 14 config + 4 qlora).
 
 **Still empty placeholders**, committed on purpose so module paths and imports stay stable:
 `src/lora_sql/train.py`, `configs/week1_parity.yaml`. Downstream code already imports names these
@@ -26,11 +30,16 @@ must provide — treat them as the contract to implement, not a bug:
   end-to-end.
 - `src/lora_sql/train.py` — the Week 2 custom training loop (Session 5). Gets prompt ids from
   `data.encode_prompt` (ChatML + `SYSTEM_PROMPT`) and builds examples with
-  `data.build_train_example` (ID-level completion + `<|im_end|>`); config-driven so ablations are N YAML files, not N edited scripts.
+  `data.build_train_example` (ID-level completion + `<|im_end|>`); loads configs via
+  `config.load_config` and the model via `qlora.load_model` / `prepare_for_training`; loss is
+  `qlora.completion_loss`. Config-driven so ablations are N YAML files in `configs/train/`, not N
+  edited scripts.
 
-**Already implemented:** `src/lora_sql/lora.py`, `src/lora_sql/data.py`, `src/lora_sql/eval/`
-(runner.py, execute.py, metrics.py), all three test files, `pyproject.toml`, and the `scripts/`
-files (`check_env.py`, `check_spider_database.py`, `toy_train.py`, `plot_toy.py`).
+**Already implemented:** `src/lora_sql/lora.py`, `src/lora_sql/data.py`, `src/lora_sql/config.py`,
+`src/lora_sql/qlora.py`, `src/lora_sql/eval/` (runner.py, execute.py, metrics.py), `configs/train/`
+(qv_r8 reference, qv_r4, qv_r16, attn_r8, all7_r8), all test files, `pyproject.toml`, and the
+`scripts/` files (`check_env.py`, `check_spider_database.py`, `toy_train.py`, `plot_toy.py`,
+`probe_memory.py`).
 
 `inject_lora` is already built and its signature is fixed by `eval/runner.py` (which calls it by
 keyword and assigns the result directly): `inject_lora(model, target_modules, rank, alpha, dropout)
@@ -84,8 +93,12 @@ python scripts/plot_toy.py   # writes results/toy_loss_curves.png, prints max pe
 python -m lora_sql.eval.runner --config configs/week1_parity.yaml
 python -m lora_sql.eval.runner --config configs/week1_parity.yaml --lora-checkpoint path/to/weights.pt
 
+# Memory/throughput probe for a train config -> results/probe_<run_name>.json
+HF_HUB_OFFLINE=1 python scripts/probe_memory.py --config configs/train/qv_r8.yaml --seq-lens 512 1024 1536 2048 2560
+
 # Tests: pytest is in requirements.txt and configured in pyproject.toml
-# (testpaths = ["tests"]). 36 passing as of Session 5 (10 injection + 8 parity + 8 data + 10 4-bit).
+# (testpaths = ["tests"]). 54 passing as of Session 5 (10 injection + 8 parity + 8 data + 10 4-bit
+# + 14 config + 4 qlora).
 pytest -v
 pytest -v tests/test_lora_parity.py   # just the parity suite
 pytest -v -s tests/test_lora_4bit.py  # 4-bit unit + QLoRA parity vs peft; -s prints max abs diffs

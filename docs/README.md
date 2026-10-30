@@ -359,6 +359,27 @@ Downgraded from live bug to: **add `assert pad_id != eos_id` when batching start
     we build at the ID level anyway. Longest prompt in that sample: 707 tokens.
   - Smoke (0.5B, untrained, 2 dev examples): prompt ≈ 256 tokens, output is bare SQL — no prose or
     code fences.
+- **1d — config, QLoRA loader, completion loss, memory probe (DONE, +18 tests).**
+  - `config.py`: frozen dataclasses; unknown / missing keys and wrong types raise with the dotted
+    path; floats coerced (YAML 1.1 reads `2e-4` as a string); `train_files` restricted to
+    `train_spider.json` / `train_others.json` by exact name; `micro_batch_size` must be 1.
+    `configs/train/`: qv_r8 (reference), qv_r4, qv_r16, attn_r8, all7_r8 — alpha = 2r.
+  - `qlora.py`: `load_model` (nf4 + double quant, bf16 compute / `none`), `prepare_for_training`
+    (`use_cache=False`, non-reentrant checkpointing, no kbit prep, no upcast, no input-grad hook —
+    test confirms LoRA grads flow on 4-bit without it), `assert_training_dtypes(model, base_dtype)`,
+    `completion_loss` via `logits_to_keep=n+1`.
+  - **`logits_to_keep` is not bit-identical to full logits, by mechanism:** `lm_head` on n+1 rows vs
+    the full sequence picks a different cuBLAS fp32 GEMM kernel (different reduction order over
+    hidden). Kept logits differ by ≤2.5e-5 at |logit|≈32; vs HF's labels loss: loss ≤2.7e-6, LoRA
+    grads ≤5.5e-6. So the test is two-tier: our CE indexing on *full* logits matches HF at 1e-6 with
+    bit-identical grads (alignment proven), and the end-to-end `logits_to_keep` path is checked at
+    1e-5. An off-by-one misalignment moves the loss 0.785 → 11.8 — six orders above the tolerance.
+  - **Train length distribution (Coder-7B tokenizer, both train files, 8,659 examples):** total p50
+    374 / p90 707 / p99 1310 / max 2228; completion p50 28 / p99 121 / max 202. `max_seq_len` 2560
+    drops nothing.
+  - **Pre-flight (qv_r8, 7B nf4):** embed / lm_head stay bf16; footprint 5.08 GB; seq 512 peaks at
+    5.67 GB allocated, 1.03 s/step; peak host RAM during load ≈ 8.7 GB of 13. Full probe numbers
+    (all7_r8, qv_r8) — TODO, from `results/probe_*.json`.
  
 ---
  
