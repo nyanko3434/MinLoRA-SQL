@@ -14,7 +14,7 @@ committed — `src/lora_sql/lora.py` (`LoRALinear`, `inject_lora`, `lora_param_s
 forward + backward numerical parity vs `peft`, fp32, atol=1e-6). Session 4 added `src/lora_sql/data.py`
 (`tests/test_data.py`, 4 passing) and a toy training loop whose loss curve is bit-identical to peft's
 (max per-step loss delta = 0.000000). `pyproject.toml` is configured (setuptools backend + pytest config).
-**`pytest -v` -> 22 passing** (10 injection + 8 parity + 4 data).
+**`pytest -v` -> 32 passing** (10 injection + 8 parity + 4 data + 10 4-bit).
 
 **Still empty placeholders**, committed on purpose so module paths and imports stay stable:
 `src/lora_sql/train.py`, `configs/week1_parity.yaml`. Downstream code already imports names these
@@ -84,9 +84,10 @@ python -m lora_sql.eval.runner --config configs/week1_parity.yaml
 python -m lora_sql.eval.runner --config configs/week1_parity.yaml --lora-checkpoint path/to/weights.pt
 
 # Tests: pytest is in requirements.txt and configured in pyproject.toml
-# (testpaths = ["tests"]). 22 passing as of Session 4 (10 injection + 8 parity + 4 data).
+# (testpaths = ["tests"]). 32 passing as of Session 5 (10 injection + 8 parity + 4 data + 10 4-bit).
 pytest -v
 pytest -v tests/test_lora_parity.py   # just the parity suite
+pytest -v -s tests/test_lora_4bit.py  # 4-bit unit + QLoRA parity vs peft; -s prints max abs diffs
 ```
 
 There is no lint/format tooling configured in this repo yet.

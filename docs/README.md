@@ -332,6 +332,23 @@ Downgraded from live bug to: **add `assert pad_id != eos_id` when batching start
 - **Open question carried into the Session 5 spec:** adapters held in fp32 on the 4-bit path
   (pure-bf16 adapter weights lose small AdamW updates to rounding). Hard rule "training in bf16"
   to be reworded as "base compute in bf16."
+
+## Session 5 — Half 1 progress
+
+- **1a — fp32 adapters (DONE).** `LoRALinear` / `inject_lora` take `adapter_dtype=torch.float32`;
+  forward mirrors peft's bnb `Linear4bit` cast order (cast `x` before dropout, scale in fp32, then
+  downcast). Resolves the open question above. fp32 parity unchanged.
+- **1b — `tests/test_lora_4bit.py` (DONE, 10 tests).** First time the 4-bit path runs in the suite.
+  - Unit, single `bnb.nn.Linear4bit(256, 128, nf4, bf16)`: `weight.shape == (16384, 1)` (packed) yet
+    adapters are `(8, 256)` / `(128, 8)`; adapters fp32, output bf16; `torch.equal` with base at init;
+    `lora_A`/`lora_B` grads fp32 and non-zero, no base param gets a grad.
+  - **QLoRA parity vs peft (0.5B, nf4, bf16 compute): bit-identical.** Logits and every per-layer
+    `lora_A`/`lora_B` grad pass `torch.equal`; **max abs diff 0.000e+00** for q/v r=8, q/v r=8 α=12,
+    and all-seven r=8. Two separate 4-bit loads are first checked bit-identical (precondition), and
+    the adapted logits are checked to differ from base (non-vacuity).
+  - **Why the α=12 case:** at scaling = α/r = 2.0 the multiply is exact in bf16, so scaling before vs
+    after the downcast can't be told apart — the pre-1a order still passes r8-qv. At scaling 1.5 the
+    old order is off from peft by 0.32 in the logits; the new order is 0.0.
  
 ---
  
