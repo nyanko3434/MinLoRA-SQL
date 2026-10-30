@@ -1,5 +1,12 @@
+> **CURRENT STATE** (overwrite at the end of every session)
+> Repo: https://github.com/nyanko3434/MinLoRA-SQL.git
+> Last commit: [51dc029da2cd8134755ca70f5a78cb97aec9b475] (dev) | pytest: 54 passed
+> Status: Session 5 Half 1 complete (4-bit parity bit-identical, probe done, max_seq_len 2048).
+> Next task: Half 2 — checkpoint.py + train.py, then launch run #1 qv_r8 (~2.7 h).
+> Not in git: data/ (Spider), Coder-7B weights (~15 GB), .venv/, runs/
+
 # MinLoRA-SQL
- 
+
 **A from-scratch LoRA implementation, numerically verified against HuggingFace `peft`, applied to
 text-to-SQL fine-tuning with an execution-based evaluation harness.**
  
@@ -767,6 +774,4 @@ Session 3 housekeeping note above.)*
  
 # WHAT I WANT HELP WITH NEXT
  
-Session 5 spec written (two halves, above decisions). Next: implement Half 1 in Claude Code
-(step 0 introspection first), end the sitting by launching the memory probe; then Half 2, end by
-launching run #1 (`qv_r8`).
+Half 1 done (54 tests, QLoRA parity bit-identical, probe → max_seq_len 2048 / 536 steps). Next: Half 2 in a fresh Claude Code session (checkpoint.py, train.py with OOM preflight and floor step count). Launch run #1 qv_r8 alone; chain the other four only after its loss curve and final/ reload are verified.
