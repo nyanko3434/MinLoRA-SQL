@@ -18,28 +18,48 @@ Session 5 Half 1 added fp32 adapters + 4-bit parity (`tests/test_lora_4bit.py`),
 contract (`data.encode_prompt` / `build_train_example`), `src/lora_sql/config.py` (strict train
 config, `configs/train/*.yaml`), `src/lora_sql/qlora.py` (`load_model`, `prepare_for_training`,
 `assert_training_dtypes`, `completion_loss`) and `scripts/probe_memory.py`.
-**`pytest -v` -> 54 passing** (10 injection + 8 parity + 8 data + 10 4-bit + 14 config + 4 qlora).
+Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
+`tests/test_checkpoint.py`) and `src/lora_sql/train.py`, the config-driven training loop
+(`tests/test_train.py`). **Next: launch run #1 `qv_r8` on the 7B.**
+**`pytest -v` -> 66 passing** (10 injection + 8 parity + 8 data + 10 4-bit + 14 config + 4 qlora
++ 6 checkpoint + 6 train).
 
-**Still empty placeholders**, committed on purpose so module paths and imports stay stable:
-`src/lora_sql/train.py`, `configs/week1_parity.yaml`. Downstream code already imports names these
-must provide — treat them as the contract to implement, not a bug:
-- `configs/week1_parity.yaml` must provide keys read by `eval/runner.py`: `model.name_or_path`,
-  `model.dtype`, `lora.target_modules`, `lora.rank`, `lora.alpha`, `data.eval_path`, `data.db_dir`,
-  `eval.max_new_tokens`, `eval.results_path`. **`data.db_dir` must point at `database/`, never
-  `test_database/`** (held-out rule). This is the only remaining blocker to running the eval harness
-  end-to-end.
-- `src/lora_sql/train.py` — the Week 2 custom training loop (Session 5). Gets prompt ids from
-  `data.encode_prompt` (ChatML + `SYSTEM_PROMPT`) and builds examples with
-  `data.build_train_example` (ID-level completion + `<|im_end|>`); loads configs via
-  `config.load_config` and the model via `qlora.load_model` / `prepare_for_training`; loss is
-  `qlora.completion_loss`. Config-driven so ablations are N YAML files in `configs/train/`, not N
-  edited scripts.
+**Still an empty placeholder**, committed on purpose so module paths stay stable:
+`configs/week1_parity.yaml`. It must provide keys read by `eval/runner.py`: `model.name_or_path`,
+`model.dtype`, `lora.target_modules`, `lora.rank`, `lora.alpha`, `data.eval_path`, `data.db_dir`,
+`eval.max_new_tokens`, `eval.results_path`. **`data.db_dir` must point at `database/`, never
+`test_database/`** (held-out rule). This is the only remaining blocker to running the eval harness
+end-to-end.
 
 **Already implemented:** `src/lora_sql/lora.py`, `src/lora_sql/data.py`, `src/lora_sql/config.py`,
-`src/lora_sql/qlora.py`, `src/lora_sql/eval/` (runner.py, execute.py, metrics.py), `configs/train/`
-(qv_r8 reference, qv_r4, qv_r16, attn_r8, all7_r8), all test files, `pyproject.toml`, and the
-`scripts/` files (`check_env.py`, `check_spider_database.py`, `toy_train.py`, `plot_toy.py`,
-`probe_memory.py`).
+`src/lora_sql/qlora.py`, `src/lora_sql/checkpoint.py`, `src/lora_sql/train.py`,
+`src/lora_sql/eval/` (runner.py, execute.py, metrics.py), `configs/train/` (qv_r8 reference, qv_r4,
+qv_r16, attn_r8, all7_r8), all test files, `pyproject.toml`, and the `scripts/` files
+(`check_env.py`, `check_spider_database.py`, `toy_train.py`, `plot_toy.py`, `probe_memory.py`).
+
+## checkpoint.py / train.py (implemented Session 5 Half 2)
+
+- `save_lora(model, out_dir, meta) -> Path` writes `adapter.safetensors` (only `lora_` keys) and a
+  `lora_config.json` sidecar. The sidecar's target_modules / rank / alpha / dropout / adapter_dtype
+  are read from the `LoRALinear` modules, not from the caller. `meta` must contain `step` and
+  `config_sha256` and may not override those model-derived fields. `git_commit` gets `+dirty` if
+  the worktree is dirty.
+- `load_lora(model, ckpt_dir) -> model` takes an UN-injected base. It checks the sidecar's
+  `base_model == model.config.name_or_path`, calls `inject_lora` from the sidecar, pre-checks
+  shapes / dtypes, then asserts no unexpected keys, every saved key consumed, model `lora_` params
+  == saved keys, tensors `torch.equal`, and at least one nonzero `lora_B` ("adapter is a no-op").
+- `train.main(cfg, limit_examples=None, overwrite=False) -> model` steps, in order:
+  1. Refuses to start if `out_dir/final/` exists (`--overwrite` removes only `final/` and `step_*/`).
+  2. Writes `config.yaml` and `data_report.json` (real data drops exactly `baseball_1: 82`;
+     8,577 kept).
+  3. Seeded shuffle; `data_order_sha256` covers both order and token ids.
+  4. Step count is FLOOR (536 steps for qv_r8).
+  5. OOM preflight: forward + backward on the longest example, with no optimizer step.
+  6. Token-weighted `accumulate_window`, then `log.jsonl` + `step_<n>/` + `final/`.
+  7. The time-budget guard saves `final/` and logs `stopped_by_budget`.
+- Testable helpers: `lr_lambda`, `warmup_steps`, `compute_total_steps`, `accumulate_window`,
+  `config_sha256`.
+- Smoke-test knob: `--limit-examples N` truncates after the shuffle and the length filter.
 
 `inject_lora` is already built and its signature is fixed by `eval/runner.py` (which calls it by
 keyword and assigns the result directly): `inject_lora(model, target_modules, rank, alpha, dropout)
@@ -89,16 +109,21 @@ python scripts/check_spider_database.py
 python scripts/toy_train.py 2>&1 | tee runs/toy_train.log
 python scripts/plot_toy.py   # writes results/toy_loss_curves.png, prints max per-step loss delta
 
+# Train one config -> runs/<run_name>/ (log.jsonl, data_report.json, step_<n>/, final/)
+systemd-inhibit --what=sleep:idle python -m lora_sql.train --config configs/train/qv_r8.yaml 2>&1 | tee runs/qv_r8.log
+# 7B sanity run (2 steps); delete runs/qv_r8 afterwards or the real launch refuses to start
+HF_HUB_OFFLINE=1 python -m lora_sql.train --config configs/train/qv_r8.yaml --limit-examples 32
+
 # Run the eval loop (generate -> execute -> score) once configs/week1_parity.yaml is implemented
 python -m lora_sql.eval.runner --config configs/week1_parity.yaml
-python -m lora_sql.eval.runner --config configs/week1_parity.yaml --lora-checkpoint path/to/weights.pt
+python -m lora_sql.eval.runner --config configs/week1_parity.yaml --lora-checkpoint path/to/weights.pt  # stale: must become a load_lora ckpt dir (see hardening)
 
 # Memory/throughput probe for a train config -> results/probe_<run_name>.json
 HF_HUB_OFFLINE=1 python scripts/probe_memory.py --config configs/train/qv_r8.yaml --seq-lens 512 1024 1536 2048 2560
 
 # Tests: pytest is in requirements.txt and configured in pyproject.toml
-# (testpaths = ["tests"]). 54 passing as of Session 5 (10 injection + 8 parity + 8 data + 10 4-bit
-# + 14 config + 4 qlora).
+# (testpaths = ["tests"]). 66 passing as of Session 5 Half 2 (10 injection + 8 parity + 8 data
+# + 10 4-bit + 14 config + 4 qlora + 6 checkpoint + 6 train).
 pytest -v
 pytest -v tests/test_lora_parity.py   # just the parity suite
 pytest -v -s tests/test_lora_4bit.py  # 4-bit unit + QLoRA parity vs peft; -s prints max abs diffs
@@ -142,9 +167,12 @@ separation of concerns — keep new eval code in the matching module rather than
 
 These do not bite until a checkpoint is loaded / generation / execution actually happens, but must
 be fixed before eval numbers mean anything:
-- `runner.py` checkpoint load is unguarded — capture the `load_state_dict(..., strict=False)` return,
-  assert `unexpected_keys == []`, and assert the checkpoint's `lora_` keys actually mapped on (a
-  prefix mismatch silently loads nothing and evaluates the untrained base while reporting success).
+- `runner.py` checkpoint load is unguarded AND now format-incompatible. It does
+  `torch.load` + a bare `load_state_dict(strict=False)`, but training writes
+  `adapter.safetensors` + `lora_config.json` dirs. Fix: replace `inject_lora` + that load with
+  `checkpoint.load_lora(base, ckpt_dir)` (it injects from the sidecar and asserts every key
+  mapped on). `--lora-checkpoint` then takes a checkpoint dir such as `runs/qv_r8/final`. With no
+  checkpoint, keep plain `inject_lora`, whose zero `lora_B` gives the base model.
 - `execute.py` opens DBs read-write — open read-only:
   `sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=timeout)`.
 - `results_match` crashes on NULLs (`sorted()` → `None < number` → TypeError) — replace with a

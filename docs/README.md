@@ -1,8 +1,9 @@
 > **CURRENT STATE** (overwrite at the end of every session)
 > Repo: https://github.com/nyanko3434/MinLoRA-SQL.git
-> Last commit: [51dc029da2cd8134755ca70f5a78cb97aec9b475] (dev) | pytest: 54 passed
-> Status: Session 5 Half 1 complete (4-bit parity bit-identical, probe done, max_seq_len 2048).
-> Next task: Half 2 — checkpoint.py + train.py, then launch run #1 qv_r8 (~2.7 h).
+> Last commit: [85e1123] (dev) | pytest: 66 passed
+> Status: Session 5 complete. checkpoint.py (save_lora / load_lora) and train.py (config-driven
+> QLoRA loop) are committed; the 7B sanity run (`--limit-examples 32`) has not been run yet.
+> Next task: 7B sanity run → delete runs/qv_r8 → launch run #1 qv_r8 (~2.7 h, 536 steps).
 > Not in git: data/ (Spider), Coder-7B weights (~15 GB), .venv/, runs/
 
 # MinLoRA-SQL
@@ -407,7 +408,61 @@ Downgraded from live bug to: **add `assert pad_id != eos_id` when batching start
     82 examples (0.95%), all from `baseball_1`; Spider's train and dev databases are disjoint, so no
     dev database loses coverage. Keeping everything (~2240) would leave ~0.6 GB on all7_r8 for an
     8,600-step run — too tight.
- 
+
+## Session 5 — Half 2 progress
+
+- **2a — `checkpoint.py` (DONE, +6 tests).**
+  - `save_lora` writes `adapter.safetensors` (only `lora_` keys, fp32) and a `lora_config.json`
+    sidecar. The sidecar has base_model, target_modules, rank, alpha, dropout, adapter_dtype, step,
+    git_commit (`+dirty` if the worktree is dirty), config_sha256, n_keys, n_params and any extra
+    meta.
+  - The structural fields are read from the `LoRALinear` modules, not from the caller, and saving
+    fails if the layers disagree.
+  - `load_lora` takes an un-injected base. It checks base_model, calls `inject_lora` from the
+    sidecar (so a wrong rank or target set fails at load), then runs a shape / dtype pre-check.
+    After `load_state_dict(strict=False)` it asserts: no unexpected keys; every saved key consumed;
+    model `lora_` params == saved keys; tensors `torch.equal`; at least one `lora_B` nonzero.
+  - **Tests:**
+    - The roundtrip gives bit-identical logits.
+    - The file holds only `lora_` keys, and its size is exactly 8 + header + n_params×4.
+    - Four bad checkpoints all raise: a `base_model.model.` key prefix, a tampered rank, an
+      all-zero `lora_B` and a wrong base model.
+- **2b — `train.py` (DONE, +6 tests).** `python -m lora_sql.train --config ... [--limit-examples N]
+  [--overwrite]`.
+  - **Run directory:**
+    - Refuses to start if `final/` exists; `--overwrite` removes only `final/` + `step_*/`.
+    - Writes `config.yaml` and `data_report.json`.
+  - **Data:**
+    - Seeded shuffle. `data_order_sha256` hashes the ordered token ids, so it covers both the
+      order and the content.
+    - FLOOR step count: 8,577 kept // 16 = **536 steps**, discarding 1 example. The probe's
+      "537" above is its ceil.
+  - **Before the first step:**
+    - asserts pad ≠ eos
+    - `assert_training_dtypes` against `cfg.model.dtype` (already in the "unchanged from load"
+      form, so `qlora.py` was not edited)
+    - OOM preflight: forward + backward on the longest example, with no optimizer step
+  - **Each step:**
+    - Token-weighted `accumulate_window`, then clip → AdamW → custom warmup + cosine
+      `LambdaLR` → zero_grad.
+    - `log.jsonl` rows record step, loss, lr, grad_norm, tokens, elapsed and peak memory.
+    - Adapters save to `step_<n>/` and, at the end, to `final/`.
+    - The time-budget guard saves `final/` and logs `stopped_by_budget`.
+  - No autocast.
+  - **Tests (0.5B fp32):**
+    - Accumulation equals one big batch within 1e-6.
+    - Schedule boundaries and step count are checked.
+    - Smoke run: logs steps 1–3, `step_2/` + `final/`, real-data drop `{"baseball_1": 82}`, and
+      `config.yaml` reloads equal.
+    - Reloading `final/` gives logits `torch.equal` to the trained model (eval mode, dropout 0.05
+      on).
+    - Budget guard and no-clobber both behave as specified.
+  - The five configs were already at `max_seq_len 2048 / max_steps null / epochs 1`; no YAML
+    changed.
+- **Known gap:** `runner.py` still loads checkpoints with `torch.load` + a bare
+  `load_state_dict(strict=False)`, which can't read the new format. It must switch to
+  `checkpoint.load_lora` before Week 3 (OPEN ITEM 5).
+
 ---
  
 # DECISIONS MADE
@@ -624,6 +679,9 @@ Recorded here so they survive even if the file is regenerated:
   `format_prompt`, `load_examples`). Session 5 adds `encode_prompt` (ChatML + `SYSTEM_PROMPT`,
   the single source of prompt ids for train and eval) and moves `build_example` in from
   `scripts/toy_train.py`.
+- ✅ `checkpoint.py` + `train.py` built and tested (Session 5 Half 2).
+- ⬜ Run #1 `qv_r8` on the 7B. Chain `qv_r4`, `qv_r16`, `attn_r8` and `all7_r8` only after its loss
+  curve and `final/` reload are verified.
  
 **Week 3 — Evaluation harness — MOSTLY ALREADY BUILT**
  
@@ -671,11 +729,16 @@ SQL_Fine-Tune/
 ├── requirements.txt        # frozen; transformers pinned to 5.14.1
 ├── .gitignore              # data/, runs/, .venv/
 ├── configs/
-│   └── week1_parity.yaml   # ⬜ empty placeholder — needed for eval runner
+│   ├── week1_parity.yaml   # ⬜ empty placeholder — needed for eval runner
+│   └── train/              # ✅ qv_r8 (reference), qv_r4, qv_r16, attn_r8, all7_r8
 ├── src/lora_sql/
 │   ├── lora.py             # ✅ LoRALinear, inject_lora, lora_param_stats
-│   ├── data.py             # ✅ Example+schema, render_schema, format_prompt, load_examples (S4)
-│   ├── train.py            # ⬜ empty placeholder — Week 2
+│   ├── data.py             # ✅ Example+schema, render_schema, format_prompt, load_examples,
+│   │                       #    encode_prompt, build_train_example
+│   ├── config.py           # ✅ S5 — strict frozen-dataclass train config
+│   ├── qlora.py            # ✅ S5 — load_model, prepare_for_training, completion_loss
+│   ├── checkpoint.py       # ✅ S5 — save_lora / load_lora (safetensors + sidecar)
+│   ├── train.py            # ✅ S5 — config-driven QLoRA training loop
 │   └── eval/
 │       ├── execute.py      # ✅ implemented
 │       ├── metrics.py      # ✅ implemented
@@ -684,12 +747,18 @@ SQL_Fine-Tune/
 │   ├── check_env.py                 # ✅ passing
 │   ├── check_spider_database.py     # ✅ passing
 │   ├── toy_train.py                 # ✅ S4 — ours vs peft toy loop (run; δ=0.0)
-│   └── plot_toy.py                  # ✅ S4 — loss-curve plot + max-δ report
+│   ├── plot_toy.py                  # ✅ S4 — loss-curve plot + max-δ report
+│   └── probe_memory.py              # ✅ S5 — peak memory / sec-per-step probe per config
 ├── tests/
 │   ├── conftest.py                  # ✅ shared fixtures: session-scoped base, fresh_model factory
 │   ├── test_lora_injection.py       # ✅ 10 passed
 │   ├── test_lora_parity.py          # ✅ 8 passed (Session 3) — peft forward+backward parity
-│   └── test_data.py                 # ✅ 4 passed (Session 4) — schema/prompt/load_examples
+│   ├── test_data.py                 # ✅ 8 passed — schema/prompt/load_examples/ChatML
+│   ├── test_lora_4bit.py            # ✅ 10 passed (S5) — 4-bit unit + QLoRA parity vs peft
+│   ├── test_config.py               # ✅ 14 passed (S5)
+│   ├── test_qlora.py                # ✅ 4 passed (S5) — completion loss vs HF, nf4 path
+│   ├── test_checkpoint.py           # ✅ 6 passed (S5) — roundtrip + load-time traps
+│   └── test_train.py                # ✅ 6 passed (S5) — accumulation, schedule, smoke run
 ├── data/                   # gitignored — spider_data/ lives here
 ├── runs/                   # gitignored — checkpoints, logs (+ toy_train.log)
 └── results/                # COMMITTED — eval JSONs, plots (toy_loss_*.json, toy_loss_curves.png)
@@ -715,12 +784,16 @@ source .venv/bin/activate
 python -c "import lora_sql; print('ok')"   # packaging gate
 python scripts/check_env.py
 python scripts/check_spider_database.py
-pytest -v                                   # 22 passing as of Session 4 (10 injection + 8 parity + 4 data)
+pytest -v                                   # 66 passing as of Session 5 Half 2
 pytest -v tests/test_lora_parity.py         # just the parity suite
  
 # Session 4 toy training figure (run from repo root):
 python scripts/toy_train.py 2>&1 | tee runs/toy_train.log   # ours vs peft, ~mins on the 4060
 python scripts/plot_toy.py                                   # writes results/toy_loss_curves.png, prints max δ
+
+# Training (Session 5) -> runs/<run_name>/ (log.jsonl, data_report.json, step_<n>/, final/)
+HF_HUB_OFFLINE=1 python -m lora_sql.train --config configs/train/qv_r8.yaml --limit-examples 32  # 7B sanity, then rm -rf runs/qv_r8
+systemd-inhibit --what=sleep:idle python -m lora_sql.train --config configs/train/qv_r8.yaml 2>&1 | tee runs/qv_r8.log
  
 # once configs/week1_parity.yaml exists (data.py already done):
 python -m lora_sql.eval.runner --config configs/week1_parity.yaml
@@ -748,9 +821,11 @@ python -m lora_sql.eval.runner --config configs/week1_parity.yaml
    - **`runner.py` checkpoint load is unguarded** — `model.load_state_dict(state, strict=False)`
      throws away the return. This is the exact CLAUDE.md "highest-value trap": a prefix mismatch
      makes `strict=False` load *nothing*, leaving `lora_B` at zero-init (adapter is a no-op) while
-     eval reports success on the untrained base. Capture the result, assert
-     `unexpected_keys == []`, and assert the checkpoint keys are a subset of the model's `lora_`
-     params (i.e. they actually mapped on).
+     eval reports success on the untrained base. **Updated fix (Session 5 Half 2):** `runner.py`
+     also can't read the training checkpoint format: it uses `torch.load` on a `.pt`, while
+     training writes `adapter.safetensors` + `lora_config.json` dirs. Replace its `inject_lora` +
+     `load_state_dict` with `checkpoint.load_lora(base, ckpt_dir)`, which already asserts
+     everything above. `--lora-checkpoint` then takes e.g. `runs/qv_r8/final`.
    - **`execute.py` opens DBs read-write** — generated SQL runs against the real
      `database/*.sqlite` with write access, so a generated `DROP`/`DELETE` could persist and
      silently corrupt the eval set. Open read-only:
@@ -774,4 +849,13 @@ Session 3 housekeeping note above.)*
  
 # WHAT I WANT HELP WITH NEXT
  
-Half 1 done (54 tests, QLoRA parity bit-identical, probe → max_seq_len 2048 / 536 steps). Next: Half 2 in a fresh Claude Code session (checkpoint.py, train.py with OOM preflight and floor step count). Launch run #1 qv_r8 alone; chain the other four only after its loss curve and final/ reload are verified.
+Session 5 done (66 tests; checkpoint.py + train.py committed). Next steps:
+
+1. 7B sanity run with `--limit-examples 32`. It's 2 steps, so it will likely finish on its own.
+   Check the drop line (`baseball_1: 82`), preflight peak reserved < 8 GB and finite loss, then
+   `rm -rf runs/qv_r8`.
+2. Launch run #1 qv_r8 alone (~2.7 h, 536 steps). Check the `log.jsonl` loss curve and that
+   `load_lora` on `final/` works.
+3. Only then chain the other four configs.
+4. Week 3 prep: `configs/week1_parity.yaml`, switch `runner.py` to `load_lora`, and the rest of
+   OPEN ITEM 5.
