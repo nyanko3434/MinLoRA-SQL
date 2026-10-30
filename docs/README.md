@@ -580,6 +580,15 @@ Recorded here so they survive even if the file is regenerated:
 - Ablations are new files in `configs/`, never edited copies of `train.py`.
 - Model roles: 0.5B = parity fixture only; Coder-7B = the actual fine-tune target.
 - GPU is an RTX 4060 Laptop, 8.2 GB VRAM. Assume memory is tight.
+- **Parity tests must include a non-power-of-two scaling case** (e.g. r=8, alpha=12 → 1.5).
+  Power-of-two scaling is exact in every float format and commutes with dtype casts, which hides
+  cast-order bugs. Every training config uses alpha=2r (scaling 2.0), so training configs alone
+  can never catch this. (Session 5: the pre-1a order was off by 0.32 at scaling 1.5, 0.0 at 2.0.)
+- `LoRALinear` cast order mirrors peft 0.19.1 bnb `Linear4bit.forward` exactly: `x` → adapter dtype
+  (fp32) BEFORE dropout; `lora_B(lora_A(dropout(x))) * scaling` in fp32; output → base output dtype,
+  then add. Do not reorder; 4-bit parity is bit-identical only in this order.
+- All `configs/train/*.yaml` share identical data settings (`max_seq_len` 2048, train files, seed);
+  ablations differ only in `run_name`, `lora.*`, `train.out_dir`. A test enforces this.
  
 ---
  
