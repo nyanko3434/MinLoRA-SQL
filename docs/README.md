@@ -1,9 +1,11 @@
 > **CURRENT STATE** (overwrite at the end of every session)
 > Repo: https://github.com/nyanko3434/MinLoRA-SQL.git
-> Last commit: [85e1123] (dev) | pytest: 66 passed
-> Status: Session 5 complete. checkpoint.py (save_lora / load_lora) and train.py (config-driven
-> QLoRA loop) are committed; the 7B sanity run (`--limit-examples 32`) has not been run yet.
-> Next task: 7B sanity run → delete runs/qv_r8 → launch run #1 qv_r8 (~2.7 h, 536 steps).
+> Last commit: [3681b70] (dev) | pytest: 66 passed
+> Status: Session 6. Run #1 qv_r8 is done (536 steps, 2.29 h, peak 6.23 GB, final/ reloads on the
+> 7B). The ablation chain (qv_r4 → qv_r16 → attn_r8 → all7_r8, ~11 h) is running. Eval-harness
+> hardening is in progress CPU-side.
+> Next task: finish the eval hardening; after the chain, run GPU tests, then score base + all five
+> runs on Spider dev.
 > Not in git: data/ (Spider), Coder-7B weights (~15 GB), .venv/, runs/
 
 # MinLoRA-SQL
@@ -463,6 +465,24 @@ Downgraded from live bug to: **add `assert pad_id != eos_id` when batching start
   `load_state_dict(strict=False)`, which can't read the new format. It must switch to
   `checkpoint.load_lora` before Week 3 (OPEN ITEM 5).
 
+## Session 6 — training runs + eval prep
+
+- **Run #1 `qv_r8` (DONE).**
+  - 536/536 optimizer steps in **2.29 h** (the probe projected 2.72 h), peak **6.23 GB**
+    reserved, no budget stop.
+  - `data_report`: 8,659 loaded, baseball_1: 82 dropped, 8,577 used, 1 tail example discarded.
+  - Logged loss: 0.593 at step 1, levelling off around **0.08** from roughly step 250 (mean of
+    the last 10 logged points 0.087). Each logged point is one window's loss, so it is noisy.
+  - Figure: `results/train_loss.png`. Evidence (log, data report, sidecar) is in
+    `results/train/qv_r8/`; adapter weights stay in gitignored `runs/`.
+- **Reload check on the real 7B (nf4).** `load_lora(model, "runs/qv_r8/final")` passes all five
+  checks. On the first two dev questions the base writes `COUNT(*)` and qv_r8 writes Spider's
+  `count(*)`, matching gold exactly, so the adapter visibly loaded. Generation peaked at 5.49 GB.
+- **Ablation chain running:** `scripts/train_chain.sh qv_r4 qv_r16 attn_r8 all7_r8` (~11 h).
+  A failed run is logged to `runs/chain.log` and the chain moves on.
+- **GPU rule while the chain runs:** all7_r8 peaks at 7.25 GB of 8.2, so only CPU tests run
+  meanwhile, always with `CUDA_VISIBLE_DEVICES=""`. No pytest that loads a model.
+
 ---
  
 # DECISIONS MADE
@@ -748,7 +768,9 @@ SQL_Fine-Tune/
 │   ├── check_spider_database.py     # ✅ passing
 │   ├── toy_train.py                 # ✅ S4 — ours vs peft toy loop (run; δ=0.0)
 │   ├── plot_toy.py                  # ✅ S4 — loss-curve plot + max-δ report
-│   └── probe_memory.py              # ✅ S5 — peak memory / sec-per-step probe per config
+│   ├── probe_memory.py              # ✅ S5 — peak memory / sec-per-step probe per config
+│   ├── train_chain.sh               # ✅ S6 — train several configs back to back
+│   └── plot_train.py                # ✅ S6 — loss + LR plot, copies run evidence to results/train/
 ├── tests/
 │   ├── conftest.py                  # ✅ shared fixtures: session-scoped base, fresh_model factory
 │   ├── test_lora_injection.py       # ✅ 10 passed
@@ -761,7 +783,8 @@ SQL_Fine-Tune/
 │   └── test_train.py                # ✅ 6 passed (S5) — accumulation, schedule, smoke run
 ├── data/                   # gitignored — spider_data/ lives here
 ├── runs/                   # gitignored — checkpoints, logs (+ toy_train.log)
-└── results/                # COMMITTED — eval JSONs, plots (toy_loss_*.json, toy_loss_curves.png)
+└── results/                # COMMITTED — eval JSONs, plots (toy_loss_*, probe_*, train_loss.png,
+                            #   train/<run>/{log.jsonl, data_report.json, lora_config.json})
 ```
  
 Two choices that pay off later:
@@ -794,6 +817,8 @@ python scripts/plot_toy.py                                   # writes results/to
 # Training (Session 5) -> runs/<run_name>/ (log.jsonl, data_report.json, step_<n>/, final/)
 HF_HUB_OFFLINE=1 python -m lora_sql.train --config configs/train/qv_r8.yaml --limit-examples 32  # 7B sanity, then rm -rf runs/qv_r8
 systemd-inhibit --what=sleep:idle python -m lora_sql.train --config configs/train/qv_r8.yaml 2>&1 | tee runs/qv_r8.log
+systemd-inhibit --what=sleep:idle bash scripts/train_chain.sh qv_r4 qv_r16 attn_r8 all7_r8   # -> runs/chain.log
+python scripts/plot_train.py --runs qv_r8 qv_r4 qv_r16 attn_r8 all7_r8   # results/train_loss.png + results/train/<run>/
  
 # once configs/week1_parity.yaml exists (data.py already done):
 python -m lora_sql.eval.runner --config configs/week1_parity.yaml
@@ -849,13 +874,14 @@ Session 3 housekeeping note above.)*
  
 # WHAT I WANT HELP WITH NEXT
  
-Session 5 done (66 tests; checkpoint.py + train.py committed). Next steps:
+Session 6 in progress (qv_r8 trained and verified; ablation chain running). Next steps:
 
-1. 7B sanity run with `--limit-examples 32`. It's 2 steps, so it will likely finish on its own.
-   Check the drop line (`baseball_1: 82`), preflight peak reserved < 8 GB and finite loss, then
-   `rm -rf runs/qv_r8`.
-2. Launch run #1 qv_r8 alone (~2.7 h, 536 steps). Check the `log.jsonl` loss curve and that
-   `load_lora` on `final/` works.
-3. Only then chain the other four configs.
-4. Week 3 prep: `configs/week1_parity.yaml`, switch `runner.py` to `load_lora`, and the rest of
-   OPEN ITEM 5.
+1. Eval-harness hardening, CPU-side while the chain runs:
+   - `runner.py` → `load_lora` + a 4-bit path via `qlora.load_model`
+   - read-only DBs, a query time limit, a NULL-safe `Counter` compare, a gold preflight
+   - fill in `configs/week1_parity.yaml` and add `configs/eval/coder7b_spider_dev.yaml`
+2. After the chain: full pytest including the new GPU runner tests, then a runner smoke run on
+   the 0.5B.
+3. Score Spider dev for base, qv_r8, qv_r4, qv_r16, attn_r8 and all7_r8. Rerun
+   `plot_train.py` for all five and write `results/eval/summary.md`.
+4. Deferred: difficulty breakdown (vendor `process_sql.py` + `eval_hardness`), BIRD-dev.

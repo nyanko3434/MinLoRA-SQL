@@ -20,7 +20,14 @@ config, `configs/train/*.yaml`), `src/lora_sql/qlora.py` (`load_model`, `prepare
 `assert_training_dtypes`, `completion_loss`) and `scripts/probe_memory.py`.
 Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
 `tests/test_checkpoint.py`) and `src/lora_sql/train.py`, the config-driven training loop
-(`tests/test_train.py`). **Next: launch run #1 `qv_r8` on the 7B.**
+(`tests/test_train.py`). Session 6:
+- **Run #1 `qv_r8` is done:** 536 steps, 2.29 h, peak 6.23 GB, logged loss levelling off ~0.08.
+  `final/` reloads on the 7B via `load_lora`.
+- The ablation chain (`qv_r4 qv_r16 attn_r8 all7_r8`, ~11 h) runs via `scripts/train_chain.sh`.
+- **While a training run or chain is using the GPU, run only CPU tests, with
+  `CUDA_VISIBLE_DEVICES=""`.** all7_r8 peaks at 7.25 GB of 8.2, so loading the 0.5B fixture
+  would OOM the training run.
+- Next: eval-harness hardening (below), then score base + all five runs on Spider dev.
 **`pytest -v` -> 66 passing** (10 injection + 8 parity + 8 data + 10 4-bit + 14 config + 4 qlora
 + 6 checkpoint + 6 train).
 
@@ -35,7 +42,8 @@ end-to-end.
 `src/lora_sql/qlora.py`, `src/lora_sql/checkpoint.py`, `src/lora_sql/train.py`,
 `src/lora_sql/eval/` (runner.py, execute.py, metrics.py), `configs/train/` (qv_r8 reference, qv_r4,
 qv_r16, attn_r8, all7_r8), all test files, `pyproject.toml`, and the `scripts/` files
-(`check_env.py`, `check_spider_database.py`, `toy_train.py`, `plot_toy.py`, `probe_memory.py`).
+(`check_env.py`, `check_spider_database.py`, `toy_train.py`, `plot_toy.py`, `probe_memory.py`,
+`train_chain.sh`, `plot_train.py`).
 
 ## checkpoint.py / train.py (implemented Session 5 Half 2)
 
@@ -113,6 +121,10 @@ python scripts/plot_toy.py   # writes results/toy_loss_curves.png, prints max pe
 systemd-inhibit --what=sleep:idle python -m lora_sql.train --config configs/train/qv_r8.yaml 2>&1 | tee runs/qv_r8.log
 # 7B sanity run (2 steps); delete runs/qv_r8 afterwards or the real launch refuses to start
 HF_HUB_OFFLINE=1 python -m lora_sql.train --config configs/train/qv_r8.yaml --limit-examples 32
+# Several configs back to back; a failed run is logged to runs/chain.log and the chain moves on
+systemd-inhibit --what=sleep:idle bash scripts/train_chain.sh qv_r4 qv_r16 attn_r8 all7_r8
+# Loss + LR plot -> results/train_loss.png; copies log/data_report/sidecar to results/train/<run>/
+python scripts/plot_train.py --runs qv_r8 qv_r4 qv_r16 attn_r8 all7_r8
 
 # Run the eval loop (generate -> execute -> score) once configs/week1_parity.yaml is implemented
 python -m lora_sql.eval.runner --config configs/week1_parity.yaml
@@ -143,6 +155,8 @@ is the output location for eval results and holds committed artifacts — the to
 (`results/toy_loss_curves.png`, `results/toy_loss_*.json`) and the memory-probe evidence
 (`results/probe_qv_r8.json`, `results/probe_all7_r8.json`), which set `data.max_seq_len = 2048` in
 every `configs/train/*.yaml` (all7_r8 OOMs at 2560; 2048 drops only 82 `baseball_1` examples).
+Training evidence is also committed: `results/train_loss.png` and `results/train/<run>/`
+(`log.jsonl`, `data_report.json`, `lora_config.json`). Adapter weights stay in `runs/`.
 Re-running `probe_memory.py` overwrites `results/probe_<run_name>.json`.
 
 ## Eval architecture (`src/lora_sql/eval/`)
