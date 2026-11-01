@@ -1,11 +1,12 @@
 > **CURRENT STATE** (overwrite at the end of every session)
 > Repo: https://github.com/nyanko3434/MinLoRA-SQL.git
-> Last commit: [3681b70] (dev) | pytest: 66 passed
+> Last commit: see `git log` (dev) | pytest: 66 verified + 16 new CPU eval tests passing; 3 GPU
+> runner tests not yet run
 > Status: Session 6. Run #1 qv_r8 is done (536 steps, 2.29 h, peak 6.23 GB, final/ reloads on the
-> 7B). The ablation chain (qv_r4 → qv_r16 → attn_r8 → all7_r8, ~11 h) is running. Eval-harness
-> hardening is in progress CPU-side.
-> Next task: finish the eval hardening; after the chain, run GPU tests, then score base + all five
-> runs on Spider dev.
+> 7B). The ablation chain (qv_r4 → qv_r16 → attn_r8 → all7_r8, ~11 h) is running. The eval
+> harness is hardened (CPU-tested).
+> Next task: after the chain, run the full pytest (GPU runner tests) + a 0.5B runner smoke run,
+> then `scripts/eval_chain.sh base qv_r8 qv_r4 qv_r16 attn_r8 all7_r8`.
 > Not in git: data/ (Spider), Coder-7B weights (~15 GB), .venv/, runs/
 
 # MinLoRA-SQL
@@ -482,6 +483,38 @@ Downgraded from live bug to: **add `assert pad_id != eos_id` when batching start
   A failed run is logged to `runs/chain.log` and the chain moves on.
 - **GPU rule while the chain runs:** all7_r8 peaks at 7.25 GB of 8.2, so only CPU tests run
   meanwhile, always with `CUDA_VISIBLE_DEVICES=""`. No pytest that loads a model.
+- **Eval-harness hardening (DONE CPU-side; closes OPEN ITEMS 3 and 5 except difficulty).**
+  - `execute.py`:
+    - Read-only URI connections: generated writes raise and the DB is untouched, and a missing
+      file is never created.
+    - A wall-clock query deadline via `set_progress_handler` (default 30 s). sqlite's `timeout` is
+      only a lock wait, so a generated cross join could otherwise hang the eval.
+    - `try/finally` close.
+    - NULL-safe, duplicate-sensitive `Counter` compare. Row order is compared only when the gold
+      has ORDER BY (the test-suite convention).
+    - `execute_and_compare` returns `(correct, exec_error)` against precomputed gold rows.
+    - Known difference from the official test-suite eval: columns are compared positionally (no
+      permutation search), so ours is slightly stricter.
+  - `runner.py`:
+    - `check_held_out` rejects `test*.json` and anything but `database/`.
+    - `gold_preflight` executes all gold queries before the model loads.
+    - Models load via `qlora.load_model` (nf4 path); checkpoints load via `checkpoint.load_lora`;
+      the base path injects nothing. The last bare `load_state_dict(strict=False)` in the repo is
+      gone.
+    - Writes a per-example `.jsonl` as it goes; the final JSON has `summary` (+
+      `n_pred_exec_errors`), `meta` (checkpoint sidecar, eval git commit) and `results`.
+    - CLI: `--out`, `--limit`.
+  - **Real-data check (CPU):** all **1,034 dev gold queries execute in 1.6 s**. 237 have ORDER BY.
+    **9 gold results contain NULLs**, so the old `sorted()` compare could have crashed a real
+    eval.
+  - **Configs:** `configs/week1_parity.yaml` is filled in as the 0.5B fp32 smoke eval (results
+    to `runs/`). New `configs/eval/coder7b_spider_dev.yaml` is the real one (nf4, dev,
+    `max_new_tokens` 256). Neither has a `lora` section: the shape comes from the sidecar.
+  - **Scripts:** new `scripts/eval_chain.sh` evaluates base + runs back to back. It refuses to
+    start if a named run has no `final/`.
+  - **Tests:** `tests/test_eval_execute.py` (16, CPU, passing) and `tests/test_eval_runner.py`
+    (3, GPU, to run after the chain).
+  - `checkpoint._git_commit` is now public `git_commit` (also used for eval provenance).
 
 ---
  
@@ -703,9 +736,8 @@ Recorded here so they survive even if the file is regenerated:
 - ⬜ Run #1 `qv_r8` on the 7B. Chain `qv_r4`, `qv_r16`, `attn_r8` and `all7_r8` only after its loss
   curve and `final/` reload are verified.
  
-**Week 3 — Evaluation harness — MOSTLY ALREADY BUILT**
- 
-`src/lora_sql/eval/` is implemented as of Session 1:
+**Week 3 — Evaluation harness — built in Session 1, hardened in Session 6** (see "Session 6"
+above for what changed; the Session 1 description below is kept for history)
  
 - `runner.py` — orchestration. Loads YAML config, loads base model + tokenizer, calls
   `inject_lora`, optionally loads a LoRA checkpoint, generates greedily (`do_sample=False`),
@@ -717,20 +749,17 @@ Recorded here so they survive even if the file is regenerated:
 - `metrics.py` — aggregation over `EvalResult` into `MetricsSummary`; overall accuracy plus
   breakdown by `difficulty`.
  
-**Remaining Week 3 work is therefore small:**
+**Remaining Week 3 work:**
  
-- `configs/week1_parity.yaml` (empty placeholder). Needs `model.name_or_path`, `model.dtype`,
-  `lora.target_modules`, `lora.rank`, `lora.alpha`, `data.eval_path`, `data.db_dir`,
-  `eval.max_new_tokens`, `eval.results_path`. **`data.db_dir` must point at `database/`,
-  never `test_database/`** — this is where the held-out rule is actually enforced.
-- Wire `eval_hardness()` from taoyds/spider so `difficulty` stops defaulting to `"unknown"`.
+- ✅ Eval configs (`configs/week1_parity.yaml` smoke, `configs/eval/coder7b_spider_dev.yaml` real);
+  the held-out rule is enforced in code by `runner.check_held_out`.
+- ⬜ Score Spider dev: base + five fine-tuned runs (`scripts/eval_chain.sh`).
+- ⬜ (deferred) Wire `eval_hardness()` from taoyds/spider so `difficulty` stops defaulting to `"unknown"`.
 - BIRD-dev zero-shot run.
 - Comparison table: base model vs. mine vs. peft-fine-tuned sanity check.
  
-**Known issue to fix before Week 3 numbers mean anything:** `runner.py`'s `generate_sql` tokenizes
-the raw prompt directly rather than using the chat wrapper the `-Instruct` model was tuned on,
-which will depress SQL quality. Fix decided in Session 5: `generate_sql` switches to
-`data.encode_prompt` (ChatML + `SYSTEM_PROMPT`), the same ids training uses.
+*(Closed Session 5, 1c: `generate_sql` uses `data.encode_prompt`, the same ChatML ids training
+uses.)*
  
 **Week 4 — Polish**
  
@@ -749,7 +778,8 @@ SQL_Fine-Tune/
 ├── requirements.txt        # frozen; transformers pinned to 5.14.1
 ├── .gitignore              # data/, runs/, .venv/
 ├── configs/
-│   ├── week1_parity.yaml   # ⬜ empty placeholder — needed for eval runner
+│   ├── week1_parity.yaml   # ✅ S6 — 0.5B fp32 smoke eval config
+│   ├── eval/               # ✅ S6 — coder7b_spider_dev.yaml (real eval, nf4)
 │   └── train/              # ✅ qv_r8 (reference), qv_r4, qv_r16, attn_r8, all7_r8
 ├── src/lora_sql/
 │   ├── lora.py             # ✅ LoRALinear, inject_lora, lora_param_stats
@@ -770,7 +800,8 @@ SQL_Fine-Tune/
 │   ├── plot_toy.py                  # ✅ S4 — loss-curve plot + max-δ report
 │   ├── probe_memory.py              # ✅ S5 — peak memory / sec-per-step probe per config
 │   ├── train_chain.sh               # ✅ S6 — train several configs back to back
-│   └── plot_train.py                # ✅ S6 — loss + LR plot, copies run evidence to results/train/
+│   ├── plot_train.py                # ✅ S6 — loss + LR plot, copies run evidence to results/train/
+│   └── eval_chain.sh                # ✅ S6 — score base + runs on Spider dev back to back
 ├── tests/
 │   ├── conftest.py                  # ✅ shared fixtures: session-scoped base, fresh_model factory
 │   ├── test_lora_injection.py       # ✅ 10 passed
@@ -780,7 +811,9 @@ SQL_Fine-Tune/
 │   ├── test_config.py               # ✅ 14 passed (S5)
 │   ├── test_qlora.py                # ✅ 4 passed (S5) — completion loss vs HF, nf4 path
 │   ├── test_checkpoint.py           # ✅ 6 passed (S5) — roundtrip + load-time traps
-│   └── test_train.py                # ✅ 6 passed (S5) — accumulation, schedule, smoke run
+│   ├── test_train.py                # ✅ 6 passed (S5) — accumulation, schedule, smoke run
+│   ├── test_eval_execute.py         # ✅ 16 passed (S6, CPU) — read-only, deadline, NULLs, guard
+│   └── test_eval_runner.py          # ⏳ 3 (S6, GPU) — load_lora path, base path, smoke run_eval
 ├── data/                   # gitignored — spider_data/ lives here
 ├── runs/                   # gitignored — checkpoints, logs (+ toy_train.log)
 └── results/                # COMMITTED — eval JSONs, plots (toy_loss_*, probe_*, train_loss.png,
@@ -820,8 +853,11 @@ systemd-inhibit --what=sleep:idle python -m lora_sql.train --config configs/trai
 systemd-inhibit --what=sleep:idle bash scripts/train_chain.sh qv_r4 qv_r16 attn_r8 all7_r8   # -> runs/chain.log
 python scripts/plot_train.py --runs qv_r8 qv_r4 qv_r16 attn_r8 all7_r8   # results/train_loss.png + results/train/<run>/
  
-# once configs/week1_parity.yaml exists (data.py already done):
-python -m lora_sql.eval.runner --config configs/week1_parity.yaml
+# Eval (Session 6): smoke on the 0.5B, then the real thing on Coder-7B nf4
+python -m lora_sql.eval.runner --config configs/week1_parity.yaml --limit 5
+python -m lora_sql.eval.runner --config configs/eval/coder7b_spider_dev.yaml --lora-checkpoint runs/qv_r8/final --out results/eval/qv_r8.json
+systemd-inhibit --what=sleep:idle bash scripts/eval_chain.sh base qv_r8 qv_r4 qv_r16 attn_r8 all7_r8
+CUDA_VISIBLE_DEVICES="" pytest -v tests/test_eval_execute.py tests/test_config.py tests/test_data.py   # CPU-only subset
 ```
  
 ---
@@ -835,12 +871,13 @@ python -m lora_sql.eval.runner --config configs/week1_parity.yaml
 2. ✅ **`data.py` — DONE (Session 4).** `Example`+`schema`, `render_schema`, `format_prompt`,
    `load_examples`; 4 tests green. Eval runner is now executable end-to-end once the config
    YAML exists (item 3).
-3. **`configs/week1_parity.yaml`** — still an empty placeholder. `data.db_dir` must point at
-   `database/`, never `test_database/`. This is now the only remaining blocker to running the
-   eval harness end-to-end.
+3. ✅ **`configs/week1_parity.yaml` — DONE (Session 6).** Filled in as the 0.5B smoke eval;
+   the real eval config is `configs/eval/coder7b_spider_dev.yaml`. `runner.check_held_out`
+   enforces `database/`.
 4. ✅ **ChatML in `runner.py` — CLOSED (Session 5, 1c).** `runner.generate_sql` builds inputs via
    `data.encode_prompt` and passes an explicit attention mask.
-5. **Eval-harness hardening — before any real eval run (Week 3), none can bite until then.**
+5. ✅ **Eval-harness hardening — DONE (Session 6), except the deferred difficulty wiring.** The
+   original review is kept below for history; see "Session 6" for the fixes.
    Reviewed the `eval/` package in a Session 3 tail; three real issues, all latent because no
    checkpoint/generation/execution happens before Week 3:
    - **`runner.py` checkpoint load is unguarded** — `model.load_state_dict(state, strict=False)`
@@ -874,14 +911,15 @@ Session 3 housekeeping note above.)*
  
 # WHAT I WANT HELP WITH NEXT
  
-Session 6 in progress (qv_r8 trained and verified; ablation chain running). Next steps:
+Session 6 in progress (qv_r8 trained and verified; ablation chain running; eval harness
+hardened). Next steps:
 
-1. Eval-harness hardening, CPU-side while the chain runs:
-   - `runner.py` → `load_lora` + a 4-bit path via `qlora.load_model`
-   - read-only DBs, a query time limit, a NULL-safe `Counter` compare, a gold preflight
-   - fill in `configs/week1_parity.yaml` and add `configs/eval/coder7b_spider_dev.yaml`
-2. After the chain: full pytest including the new GPU runner tests, then a runner smoke run on
-   the 0.5B.
-3. Score Spider dev for base, qv_r8, qv_r4, qv_r16, attn_r8 and all7_r8. Rerun
-   `plot_train.py` for all five and write `results/eval/summary.md`.
+1. After the chain:
+   - check `runs/chain.log` (four `exit 0`, each `final/` at step 536)
+   - run the full `pytest -v`, including the 3 GPU runner tests
+   - `python -m lora_sql.eval.runner --config configs/week1_parity.yaml --limit 5`
+2. `systemd-inhibit --what=sleep:idle bash scripts/eval_chain.sh base qv_r8 qv_r4 qv_r16 attn_r8
+   all7_r8`. Time the first eval to project the rest.
+3. Rerun `plot_train.py` for all five runs and write `results/eval/summary.md` (run, targets,
+   rank, LoRA params, train hours, dev EX).
 4. Deferred: difficulty breakdown (vendor `process_sql.py` + `eval_hardness`), BIRD-dev.

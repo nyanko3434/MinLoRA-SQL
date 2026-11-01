@@ -22,7 +22,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _REQUIRED_META = ("step", "config_sha256")
 
 
-def _git_commit() -> str:
+def git_commit() -> str:
     try:
         def git(*args):
             return subprocess.run(
@@ -62,7 +62,7 @@ def save_lora(model: nn.Module, out_dir: str | Path, meta: dict) -> Path:
     clash = sorted(set(meta) & set(sidecar))
     assert clash == [], f"meta may not override fields read from the model: {clash}"
     sidecar.update(
-        git_commit=_git_commit(),
+        git_commit=git_commit(),
         n_keys=len(state),
         n_params=sum(v.numel() for v in state.values()),
         **meta,
