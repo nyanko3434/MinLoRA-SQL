@@ -167,7 +167,7 @@ tests/             85 tests: injection, fp32 and 4-bit parity, data, configurati
                    checkpointing, training loop, evaluation
 results/           committed evidence: figures, memory probes, training logs, per-question
                    evaluation results, summary table
-docs/              project log and an explanatory guide
+docs/              an explanatory guide to the project, from background to results
 ```
 
 ## Reproducing
