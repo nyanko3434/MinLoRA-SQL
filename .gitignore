@@ -9,3 +9,7 @@ data/
 runs/
 
 .DS_Store
+
+.env
+# private planning log (kept locally, not published)
+docs/PROJECT_LOG.md

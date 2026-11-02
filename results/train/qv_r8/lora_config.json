@@ -1,0 +1,17 @@
+{
+  "base_model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+  "target_modules": [
+    "q_proj",
+    "v_proj"
+  ],
+  "rank": 8,
+  "alpha": 16,
+  "dropout": 0.05,
+  "adapter_dtype": "float32",
+  "git_commit": "ccc36615d415353cc433f293d7b419fa2fbf10d5",
+  "n_keys": 112,
+  "n_params": 2523136,
+  "step": 536,
+  "config_sha256": "c825c7bd1564dba95d8843c232cbebbd09c429382d2f57efd196d0214fa3ae84",
+  "data_order_sha256": "c5c7372a78338c4971d46f3a087194d3cd8a12389dcd8864a50c65e8f7d28a6b"
+}

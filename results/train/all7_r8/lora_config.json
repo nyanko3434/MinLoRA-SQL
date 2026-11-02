@@ -1,0 +1,22 @@
+{
+  "base_model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+  "target_modules": [
+    "down_proj",
+    "gate_proj",
+    "k_proj",
+    "o_proj",
+    "q_proj",
+    "up_proj",
+    "v_proj"
+  ],
+  "rank": 8,
+  "alpha": 16,
+  "dropout": 0.05,
+  "adapter_dtype": "float32",
+  "git_commit": "c1b3174627bbf24ed29e070c4c6fe630a54321e8",
+  "n_keys": 392,
+  "n_params": 20185088,
+  "step": 536,
+  "config_sha256": "42ac9882b25c3213c4b167b6a3aa3552f6bfd3d6e90f1d0ee63e886cb64dff06",
+  "data_order_sha256": "c5c7372a78338c4971d46f3a087194d3cd8a12389dcd8864a50c65e8f7d28a6b"
+}

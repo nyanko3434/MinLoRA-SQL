@@ -1,0 +1,14 @@
+# Real eval: Qwen2.5-Coder-7B-Instruct on Spider dev (1,034), same nf4 loader as training.
+# Base model: no --lora-checkpoint. Fine-tuned: --lora-checkpoint runs/<run>/final.
+# Pass --out results/eval/<name>.json per run.
+model:
+  name_or_path: Qwen/Qwen2.5-Coder-7B-Instruct
+  quant: nf4              # nf4 | none
+  double_quant: true
+  dtype: bfloat16
+data:
+  eval_path: data/spider_data/dev.json
+  db_dir: data/spider_data/database     # never test_database/ (runner.check_held_out enforces it)
+eval:
+  max_new_tokens: 256     # longest training SQL is 202 tokens
+  results_path: results/eval/coder7b_base.json

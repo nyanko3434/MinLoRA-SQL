@@ -1,0 +1,190 @@
+{
+  "config": "configs/train/qv_r8.yaml",
+  "run_name": "qv_r8",
+  "completion_len": 202,
+  "steps_per_length": 3,
+  "train_examples": 8659,
+  "total_len": {
+    "p50": 374,
+    "p90": 707,
+    "p99": 1310,
+    "max": 2228
+  },
+  "completion_len_dist": {
+    "p50": 28,
+    "p90": 74,
+    "p99": 121,
+    "max": 202
+  },
+  "dropped_by_max_seq_len": {
+    "512": {
+      "n_dropped": 2365,
+      "db_ids": {
+        "scholar": 348,
+        "academic": 181,
+        "college_2": 170,
+        "college_1": 164,
+        "store_1": 112,
+        "imdb": 109,
+        "hospital_1": 100,
+        "cre_Doc_Tracking_DB": 90,
+        "department_store": 88,
+        "chinook_1": 84,
+        "cre_Theme_park": 84,
+        "customers_and_invoices": 82,
+        "sakila_1": 82,
+        "baseball_1": 82,
+        "cre_Drama_Workshop_Groups": 82,
+        "formula_1": 80,
+        "tracking_grants_for_research": 78,
+        "student_assessment": 53,
+        "behavior_monitoring": 40,
+        "e_government": 40,
+        "cre_Doc_Control_Systems": 33,
+        "assets_maintenance": 31,
+        "products_for_hire": 18,
+        "hr_1": 17,
+        "local_govt_and_lot": 17,
+        "customer_deliveries": 16,
+        "solvency_ii": 15,
+        "soccer_1": 14,
+        "tracking_software_problems": 13,
+        "customers_campaigns_ecommerce": 10,
+        "college_3": 9,
+        "local_govt_mdm": 8,
+        "yelp": 8,
+        "insurance_fnol": 2,
+        "document_management": 2,
+        "customers_and_addresses": 2,
+        "apartment_rentals": 1
+      }
+    },
+    "1024": {
+      "n_dropped": 184,
+      "db_ids": {
+        "baseball_1": 82,
+        "cre_Drama_Workshop_Groups": 82,
+        "sakila_1": 13,
+        "cre_Theme_park": 6,
+        "formula_1": 1
+      }
+    },
+    "1536": {
+      "n_dropped": 82,
+      "db_ids": {
+        "baseball_1": 82
+      }
+    },
+    "2048": {
+      "n_dropped": 82,
+      "db_ids": {
+        "baseball_1": 82
+      }
+    },
+    "2560": {
+      "n_dropped": 0,
+      "db_ids": {}
+    }
+  },
+  "model": {
+    "embed_tokens": "Embedding torch.bfloat16",
+    "lm_head": "Linear torch.bfloat16",
+    "memory_footprint_gb": 5.078868389129639,
+    "allocated_after_load_gb": 5.187521934509277,
+    "lora_params": 2523136
+  },
+  "lengths": [
+    {
+      "seq_len": 512,
+      "status": "ok",
+      "max_allocated_gb": 5.6713433265686035,
+      "max_reserved_gb": 5.75,
+      "step_times": [
+        1.4649950769999123,
+        1.0487809739997829,
+        1.070657409999967
+      ],
+      "sec_per_step": 1.059719191999875
+    },
+    {
+      "seq_len": 1024,
+      "status": "ok",
+      "max_allocated_gb": 5.784027576446533,
+      "max_reserved_gb": 6.001953125,
+      "step_times": [
+        1.8871647010000743,
+        1.8709895279998818,
+        1.8711731710000095
+      ],
+      "sec_per_step": 1.8710813494999456
+    },
+    {
+      "seq_len": 1536,
+      "status": "ok",
+      "max_allocated_gb": 6.003605365753174,
+      "max_reserved_gb": 6.232421875,
+      "step_times": [
+        2.7515744070001347,
+        2.7633518640000148,
+        2.764943540999866
+      ],
+      "sec_per_step": 2.7641477024999404
+    },
+    {
+      "seq_len": 2048,
+      "status": "ok",
+      "max_allocated_gb": 6.2187886238098145,
+      "max_reserved_gb": 6.5703125,
+      "step_times": [
+        3.7889049630002773,
+        3.748692172000119,
+        3.752241749999939
+      ],
+      "sec_per_step": 3.750466961000029
+    },
+    {
+      "seq_len": 2560,
+      "status": "ok",
+      "max_allocated_gb": 6.455334186553955,
+      "max_reserved_gb": 6.810546875,
+      "step_times": [
+        4.704691931999605,
+        4.715706574000251,
+        4.714914302000125
+      ],
+      "sec_per_step": 4.715310438000188
+    }
+  ],
+  "projection": {
+    "512": {
+      "kept_examples": 6294,
+      "optimizer_steps": 394,
+      "epoch_hours": 1.8527423873461726,
+      "within_time_budget": true
+    },
+    "1024": {
+      "kept_examples": 8475,
+      "optimizer_steps": 530,
+      "epoch_hours": 2.6583415626868065,
+      "within_time_budget": true
+    },
+    "1536": {
+      "kept_examples": 8577,
+      "optimizer_steps": 537,
+      "epoch_hours": 2.721664171260382,
+      "within_time_budget": true
+    },
+    "2048": {
+      "kept_examples": 8577,
+      "optimizer_steps": 537,
+      "epoch_hours": 2.721664171260382,
+      "within_time_budget": true
+    },
+    "2560": {
+      "kept_examples": 8659,
+      "optimizer_steps": 542,
+      "epoch_hours": 2.8103369330052637,
+      "within_time_budget": true
+    }
+  }
+}

@@ -1,0 +1,30 @@
+run_name: qv_r8
+seed: 0
+model:
+  name_or_path: Qwen/Qwen2.5-Coder-7B-Instruct
+  quant: nf4              # nf4 | none
+  double_quant: true
+  dtype: bfloat16
+  gradient_checkpointing: true
+lora:
+  target_modules: [q_proj, v_proj]
+  rank: 8
+  alpha: 16         # alpha = 2r everywhere
+  dropout: 0.05
+data:
+  spider_root: data/spider_data
+  train_files: [train_spider.json, train_others.json]   # the only files config.py allows
+  max_seq_len: 2048       # probe (results/probe_*.json): all7_r8 OOMs at 2560; 2048 drops 82 baseball_1 examples (0.95%)
+train:
+  micro_batch_size: 1
+  grad_accum_steps: 16
+  epochs: 1
+  max_steps: null
+  lr: 2.0e-4
+  weight_decay: 0.0
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+  log_every: 10
+  save_every: 100
+  time_budget_hours: 6.0
+  out_dir: runs/qv_r8

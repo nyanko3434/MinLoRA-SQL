@@ -1,0 +1,14 @@
+# Smoke eval config for the runner: the 0.5B parity fixture in fp32 (fast, ~2 GB). Never a
+# reported number; results go to runs/, not results/. The LoRA shape for a checkpoint comes from
+# its lora_config.json sidecar, so there is no lora section here.
+model:
+  name_or_path: Qwen/Qwen2.5-0.5B-Instruct
+  quant: none             # nf4 | none
+  double_quant: false
+  dtype: float32
+data:
+  eval_path: data/spider_data/dev.json
+  db_dir: data/spider_data/database     # never test_database/ (runner.check_held_out enforces it)
+eval:
+  max_new_tokens: 256     # longest training SQL is 202 tokens
+  results_path: runs/eval_smoke.json
