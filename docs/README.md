@@ -4,7 +4,8 @@
 > Status: Session 6 COMPLETE. All five configs trained (536 steps each) and scored on Spider dev
 > with the hardened harness. Base EX 74.95%; best qv_r16 77.47% / all7_r8 77.56% (+2.5 pts,
 > nominal p≈0.035, not significant after Holm correction). See `results/eval/summary.md`.
-> Next task: decide what Week 4 covers (difficulty breakdown, BIRD-dev, seed repeats, write-up).
+> Next task: public-facing root README.md (+ LICENSE), then merge dev → main as v1. After that:
+> difficulty breakdown, BIRD-dev, seed repeats, write-up.
 > Not in git: data/ (Spider), Coder-7B weights (~15 GB), .venv/, runs/
 
 # MinLoRA-SQL
@@ -951,9 +952,14 @@ Session 3 housekeeping note above.)*
 
 Session 6 COMPLETE: five configs trained, base + five scored on Spider dev
 (`results/eval/summary.md`). The fine-tuning gains are small (+1 to +2.6 pts) and not
-significant after correction, against a base that is probably Spider-contaminated. Candidate
-next steps (my decision):
+significant after correction, against a base that is probably Spider-contaminated. `dev` is
+d533eaa+ (all committed); `main` still holds only the initial skeleton (1e04e8d). Candidate next
+steps (my decision):
 
+0. **v1 to main.** Write a public-facing `README.md` at the repo root: what it is, the parity
+   result, the results table, figures, how to reproduce, hardware, limitations. This file
+   (`docs/README.md`) is a private planning log with personal background, so it isn't the
+   front page. Pick a LICENSE, then merge `dev` into `main` and push.
 1. Spider difficulty breakdown (vendor `process_sql.py` + `eval_hardness`, thread `difficulty`
    into `EvalResult`). It shows where the gains and losses sit.
 2. BIRD-dev zero-shot, base vs best run: a less contaminated generalization test.

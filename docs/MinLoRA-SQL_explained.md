@@ -1,7 +1,8 @@
 # MinLoRA-SQL — The Whole Project, From Zero
 
-*A self-contained guide: what the project is, the background you need, what has been built, what the
-command running right now is doing, and what is left. Written during run #1 (`qv_r8`), Session 5.*
+*A self-contained guide: what the project is, the background you need, what was built, how it was
+run, what the results are, and what is left. Started during run #1 (Session 5); updated at the end of
+Session 6, when all five configs had been trained and scored on Spider dev.*
 
 ---
 
@@ -14,11 +15,13 @@ command running right now is doing, and what is left. Written during run #1 (`qv
 5. [Key design decisions and why](#5-key-design-decisions-and-why)
 6. [What has been built, session by session](#6-what-has-been-built-session-by-session)
 7. [Code map: what every file does](#7-code-map-what-every-file-does)
-8. [The command you are running, dissected](#8-the-command-you-are-running-dissected)
+8. [The training command, dissected](#8-the-training-command-dissected)
 9. [What `train.py` does, step by step](#9-what-trainpy-does-step-by-step)
-10. [Reading the log: is the run healthy?](#10-reading-the-log-is-the-run-healthy)
-11. [What happens next](#11-what-happens-next)
-12. [Glossary](#12-glossary)
+10. [Reading a training log: is the run healthy?](#10-reading-a-training-log-is-the-run-healthy)
+11. [The evaluation harness](#11-the-evaluation-harness)
+12. [Results](#12-results)
+13. [What happens next](#13-what-happens-next)
+14. [Glossary](#14-glossary)
 
 ---
 
@@ -29,8 +32,11 @@ at one job: turning an English question about a database into a correct **SQL qu
 retraining the whole model (impossible on an 8 GB laptop GPU), you use **LoRA**, a technique that freezes
 the model and trains a tiny add-on. The twist that makes this a strong resume project: **you wrote LoRA
 yourself** and **proved mathematically and empirically that it is bit-for-bit identical** to the industry
-standard library (HuggingFace `peft`). Then you will measure improvement the objective way: **run every
-generated query against a real database and check whether it returns the right rows.**
+standard library (HuggingFace `peft`). Then you measured improvement the objective way: **run every
+generated query against a real database and check whether it returns the right rows.** Result: five
+fine-tunes trained on the laptop, the best scoring 77.6% on Spider dev vs the untuned model's 75.0%.
+That is a real but small gain, and not statistically conclusive. The likely reason is that the base
+model already knows Spider well (§12).
 
 ---
 
@@ -175,7 +181,8 @@ statements) plus the question. The model must produce SQL.
 | `test.json` + `test_database/` | — | **held out, never touched** (reserved for at most one final check) |
 
 The training and dev sets use **different databases**. Good results on dev therefore mean the model
-generalizes to schemas it has never seen.
+generalizes to schemas it has never seen. (Caveat, found in Session 6: Spider is public and old,
+so the base model has very probably seen it during pretraining. See §12.)
 
 **BIRD-dev** is a harder, more realistic benchmark. It will be used zero-shot (never trained on) to test
 generalization.
@@ -188,7 +195,16 @@ Example: question *"How many singers do we have?"*
 - Model: `SELECT COUNT(singer_id) FROM singer` → `[(6,)]` → **correct**, even though the text differs.
 
 Accuracy = fraction of dev questions where the result sets match. (The official Spider metric, "test-suite
-accuracy," is a stricter variant. The writeup will cite it.)
+accuracy," runs each query on several extra database variants, which this project doesn't have. The
+writeup will cite it.)
+
+Two details of *how* rows are compared matter:
+
+- **Row order** counts only when the gold query has `ORDER BY`. Otherwise the rows are compared as a
+  bag, so duplicates matter but order doesn't.
+- **Column order:** this harness compares columns by position, so `SELECT count(*), grade` is wrong
+  when the gold is `SELECT grade, count(*)`. The official eval allows any column order. §12 measures
+  how much this matters (2–3 points for everyone, and it does not change the conclusions).
 
 ---
 
@@ -215,9 +231,11 @@ The **scaling-1.5 case** is the clever bit. Multiplying by 2.0 is exact in every
 *when* you convert between fp32 and bf16 is invisible at scaling 2.0. That's exactly what all your
 training configs use. At scaling 1.5 the old (buggy) order was off by 0.32; the fixed order is exactly 0.
 
-### Claim 2: Rigorous evaluation. "Measured by execution accuracy." **TO EARN (Week 3).**
+### Claim 2: Rigorous evaluation. "Measured by execution accuracy." **EARNED (Session 6).**
 
-The evaluation code exists, but it needs hardening before it produces trustworthy numbers (see §11).
+The harness was hardened (§11), and the base model plus all five fine-tunes were scored on all 1,034
+dev questions. Every number traces back to the exact checkpoint and code commit that produced it, and
+the differences were tested for statistical significance rather than just eyeballed (§12).
 
 ---
 
@@ -252,7 +270,8 @@ The evaluation code exists, but it needs hardening before it produces trustworth
 | **4** | `data.py` (schema-as-DDL prompts); Coder-7B download verified; 200-step toy training ours vs peft | Loss curves **identical at every step** (figure in `results/`) |
 | **5, Half 1** | fp32 adapters with peft's cast order; 4-bit tests + **QLoRA parity** (0.0); ChatML prompt contract; config system; 4-bit model loader; completion-only loss; memory probe | Probe: `qv_r8` peaks ~6.6 GB, `all7_r8` OOMs at 2560 → `max_seq_len` = 2048 |
 | **5, Half 2** | `checkpoint.py` (safe save/load) and `train.py` (the training loop) | **66 tests pass.** 32-example sanity run on the 7B OK |
-| **Now** | **Run #1: `qv_r8` on the full training set** | In progress, healthy (§10) |
+| **6** | Run #1 `qv_r8` (2.29 h); reload check on the real 7B; `train_chain.sh` runs the other four overnight (~10 h); loss plot | All five runs finish 536/536 steps, peak memory ≤ 6.74 GB |
+| **6** | Eval harness hardened (§11); `eval_chain.sh` scores base + five runs (~2.5 h); `summarize_eval.py` writes the results table with significance tests | **85 tests pass.** Base 74.95% → best 77.56% (§12) |
 
 ---
 
@@ -272,20 +291,28 @@ src/lora_sql/
 ├── checkpoint.py   save_lora / load_lora: save only adapter weights + a JSON describing them;
 │                   loading rebuilds the adapters and verifies every weight actually arrived.
 ├── train.py        The training loop (§9).
-└── eval/           runner.py (generate SQL for dev), execute.py (run SQL on SQLite, compare
-                    results), metrics.py (accuracy, by difficulty). Needs Week 3 hardening.
+└── eval/           runner.py (load model + adapter, generate SQL for every dev question, write
+                    results), execute.py (run SQL read-only with a time limit, compare result rows),
+                    metrics.py (accuracy, and by difficulty once that is wired in). See §11.
 
-configs/train/      qv_r8 (reference), qv_r4, qv_r16, attn_r8, all7_r8 — the five planned runs.
-scripts/            check_env, toy_train + plot_toy (Session 4 figure), probe_memory (Session 5).
-tests/              66 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint, train.
-results/            COMMITTED: plots, JSON results (toy curves, probe numbers).
-runs/               NOT committed: checkpoints and logs from training.
+configs/train/      qv_r8 (reference), qv_r4, qv_r16, attn_r8, all7_r8 — the five runs.
+configs/eval/       coder7b_spider_dev.yaml — the real eval (7B in 4-bit, dev, database/).
+configs/week1_parity.yaml   a quick smoke eval on the 0.5B (results go to runs/, never reported).
+scripts/            check_env, toy_train + plot_toy (Session 4 figure), probe_memory (Session 5),
+                    train_chain.sh (train several configs back to back), plot_train.py (loss plot),
+                    eval_chain.sh (score several runs back to back), summarize_eval.py (results table).
+tests/              85 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint,
+                    train, eval execution (CPU), eval runner (GPU).
+results/            COMMITTED: plots and JSON: toy curves, probe numbers, train_loss.png,
+                    train/<run>/ (log, data report, adapter description), eval/<name>.json + .jsonl
+                    (every prediction), eval/summary.md (the results table).
+runs/               NOT committed: adapter weights and raw logs from training.
 data/               NOT committed: Spider.
 ```
 
 ---
 
-## 8. The command you are running, dissected
+## 8. The training command, dissected
 
 ```bash
 HF_HUB_OFFLINE=1 systemd-inhibit --what=sleep:idle python -m lora_sql.train \
@@ -302,7 +329,18 @@ HF_HUB_OFFLINE=1 systemd-inhibit --what=sleep:idle python -m lora_sql.train \
 | `\| tee runs/qv_r8.log` | Show output on screen **and** save it to a file. |
 
 Closing the terminal kills the run. It is fine to use the laptop for light work meanwhile. Avoid anything
-GPU-heavy: there is ~2 GB of VRAM headroom.
+GPU-heavy: there is ~2 GB of VRAM headroom (only ~1.5 GB during `all7_r8`). That is also why, while
+training runs, only CPU tests are run (`CUDA_VISIBLE_DEVICES=""`): loading even the 0.5B test model
+would push training out of memory.
+
+The other four runs used the same command inside a loop:
+
+```bash
+systemd-inhibit --what=sleep:idle bash scripts/train_chain.sh qv_r4 qv_r16 attn_r8 all7_r8
+```
+
+`train_chain.sh` trains each config in turn, records `<name> exit <code>` in `runs/chain.log`, and
+moves on if one fails, since the runs are independent.
 
 ---
 
@@ -334,7 +372,9 @@ GPU-heavy: there is ~2 GB of VRAM headroom.
 
 ---
 
-## 10. Reading the log: is the run healthy?
+## 10. Reading a training log: is the run healthy?
+
+*(Written live during run #1. All five runs ended up looking like this: see `results/train_loss.png`.)*
 
 ### Line by line
 
@@ -391,13 +431,17 @@ step 150/536  loss 0.1128  lr 1.69e-04  gnorm 0.398  38.7 min  peak 6.23 GB
 taught from scratch.
 
 **Why the loss jumps around (0.07 ↔ 0.21):** each logged value is one window of only 16 examples. Some
-windows contain harder questions. Look at the trend, not single points. A smoothed plot is planned.
+windows contain harder questions. Look at the trend, not single points. `results/train_loss.png` shows
+the raw points faintly and a 5-point rolling mean in bold. All five runs saw the same examples in the
+same order, so their spikes happen at the same steps.
 
 **Why this training loss is an honest signal:** with 1 epoch, every example is seen exactly once. Each
 step's loss is measured on examples the model has never trained on before.
 
 **But low training loss ≠ high accuracy.** A query can be one token wrong and return different rows. Only
-the dev execution accuracy (Week 3) tells you whether the model actually improved.
+the dev execution accuracy tells you whether the model actually improved. §12 shows this concretely:
+`all7_r8` reached by far the lowest training loss (0.065 vs ~0.085) but is no more accurate than
+`qv_r16`.
 
 ### Warning signs to watch for
 
@@ -412,89 +456,155 @@ the dev execution accuracy (Week 3) tells you whether the model actually improve
 
 ---
 
-## 11. What happens next
+## 11. The evaluation harness
 
-### 11.1 When run #1 finishes (~2.3 h total)
+Evaluation is three steps: **generate** SQL for every dev question, **execute** it on the real
+database, and **score** it against the gold query's rows. Before Session 6 this code existed but
+could not be trusted. Here is what was fixed, and why each fix matters.
 
-1. Confirm `runs/qv_r8/` has `step_100/` … `step_500/`, `final/`, `log.jsonl`, `data_report.json`.
-2. **Verify `final/` reloads** with `load_lora` on a fresh 4-bit base. A successful load means every
-   safety assertion passed:
-   ```bash
-   HF_HUB_OFFLINE=1 python -c "
-   from lora_sql.config import load_config
-   from lora_sql.qlora import load_model
-   from lora_sql.checkpoint import load_lora
-   cfg = load_config('configs/train/qv_r8.yaml')
-   m = load_model(cfg.model)            # adjust if load_model returns (model, tokenizer)
-   load_lora(m, 'runs/qv_r8/final'); print('final/ reload OK')
-   "
-   ```
-3. **Plot the loss curve** from `log.jsonl` (raw + smoothed). This needs a small `scripts/plot_train.py`,
-   not built yet.
-4. Update the README's CURRENT STATE block.
+| fix | the problem it prevents |
+|---|---|
+| Checkpoints load through `load_lora` | The old code used an unchecked load that could silently load *nothing*, and then the "fine-tuned" score would really be the base model's. |
+| 4-bit loading, same loader as training | The 7B in bf16 (~15 GB) doesn't fit on the GPU. |
+| No adapter at all for the base model | The baseline is the true untouched model, not a model with an empty adapter. |
+| Databases opened **read-only** | A generated `DROP TABLE` or `DELETE` simply fails and is scored wrong. It can't damage the databases every later eval uses. |
+| A **30-second time limit** per query | A generated query with an accidental huge join could otherwise hang the eval forever. (sqlite's own `timeout` only covers waiting for a lock.) |
+| **NULL-safe** comparison | The old comparison sorted the rows, and Python can't sort `None` next to text. 9 dev gold answers contain NULLs, so a real eval would have crashed partway through. |
+| **Gold preflight** | All 1,034 gold queries are run first (1.6 s). A broken database path fails in seconds, not after 20 minutes of generation. |
+| **Held-out guard** | The runner refuses to run on `test.json` or `test_database/`. The rule is enforced in code, not left to memory. |
+| Results written **as it goes** (`.jsonl`) | A crash at question 900 keeps the first 899. |
+| **Provenance** in every result file | Each result JSON records the adapter's description (rank, targets, training step, config hash) and the code commit, so each number traces back to exactly what produced it. |
 
-### 11.2 The ablation runs (Week 2, remainder)
+Decoding is **greedy** (always pick the most likely token), so every eval is deterministic and
+repeatable. Before the full runs, a 20-question probe checked that the base model outputs bare SQL,
+with no markdown fences or explanations, so the baseline isn't scored down for formatting.
 
-Same script, different config file. Only the LoRA settings change; the data fingerprint must match.
+The commands:
 
-| config | adapts | rank | trainable params | est. time | question it answers |
-|---|---|---|---|---|---|
-| `qv_r8` | q, v | 8 | 2.5M | ~2.3 h | **reference (running now)** |
-| `qv_r4` | q, v | 4 | 1.3M | ~2.3 h | does a smaller rank lose accuracy? |
-| `qv_r16` | q, v | 16 | 5.0M | ~2.4 h | does a bigger rank help? |
-| `attn_r8` | q, k, v, o | 8 | ~5.0M | ~2.6 h | does adapting all attention help? |
-| `all7_r8` | all seven | 8 | 20.2M | ~3.1 h | is adapting the MLP worth 8× the parameters? (75% of LoRA params live in the MLP) |
+```bash
+# one model
+python -m lora_sql.eval.runner --config configs/eval/coder7b_spider_dev.yaml \
+    --lora-checkpoint runs/qv_r8/final --out results/eval/qv_r8.json
+# base + all five, back to back (~20-28 min each)
+systemd-inhibit --what=sleep:idle bash scripts/eval_chain.sh base qv_r8 qv_r4 qv_r16 attn_r8 all7_r8
+# the results table -> results/eval/summary.md
+python scripts/summarize_eval.py
+```
 
-Plan: chain `qv_r4` + `qv_r16` one night, `attn_r8` + `all7_r8` the next. About 12 h of unattended GPU
-time.
+---
 
-### 11.3 Evaluation harness (Week 3): earning Claim 2
+## 12. Results
 
-The `eval/` code exists but has known gaps. These must be fixed **before** any number is trusted:
+### 12.1 Training (all five runs)
 
-1. **Eval config file** (`configs/week1_parity.yaml` is an empty placeholder). It must point at
-   `database/`, never `test_database/`.
-2. **Checkpoint loading:** `runner.py` still uses an old unsafe load and can't read the new checkpoint
-   format. Switch it to `checkpoint.load_lora`. Otherwise you could silently evaluate the untrained model.
-3. **4-bit loading for eval:** the 7B in bf16 (~15 GB) won't fit; eval must load it in 4-bit like
-   training.
-4. **Read-only databases:** a generated `DROP TABLE` must not be able to damage the eval databases.
-5. **NULL-safe result comparison:** the current comparison crashes on NULL values, which Spider has.
-6. **Small robustness fixes:** close DB connections on errors; don't let a failing gold query kill the
-   run.
-7. **Difficulty labels:** wire in Spider's official `eval_hardness()` so accuracy is broken down by
-   easy / medium / hard / extra.
-8. **Run the evals:** the untrained Coder-7B (**baseline**) and each of the 5 fine-tuned adapters, on all
-   1,034 dev questions.
-9. **BIRD-dev zero-shot:** download BIRD (it is not downloaded yet), check that the schema renderer handles
-   its format, run base vs best adapter.
-10. **Open decision:** the README's comparison table mentions a "peft-fine-tuned" 7B row. That is a whole
-    extra training run, and parity already makes it redundant. Recommended: drop it.
+| run | adapts | rank | LoRA params | train time | peak memory | final loss (avg of last 10 logs) |
+|---|---|---|---|---|---|---|
+| `qv_r8` | q, v | 8 | 2.52M | 2.29 h | 6.23 GB | 0.087 |
+| `qv_r4` | q, v | 4 | 1.26M | 2.27 h | 6.21 GB | 0.090 |
+| `qv_r16` | q, v | 16 | 5.05M | 2.25 h | 6.26 GB | 0.084 |
+| `attn_r8` | q, k, v, o | 8 | 5.05M | 2.31 h | 6.27 GB | 0.080 |
+| `all7_r8` | all seven | 8 | 20.19M | 3.06 h | 6.74 GB | 0.065 |
 
-### 11.4 Writeup and polish (Week 4)
+Every run completed 536/536 steps with no memory problems.
 
-- A mini-paper: motivation → method (LoRA, QLoRA, parity methodology) → results (accuracy table, by
-  difficulty, BIRD) → ablations → limitations (the `baseball_1` drop; single-DB execution accuracy vs the
-  official test-suite metric).
-- Figures: toy parity curve, run #1 loss curve, ablation accuracy plot.
-- Clean the repo, final README, resume bullet. **Lead with parity.**
-- Optional: export adapters in peft format, so anyone can load them with stock peft and reproduce results.
+### 12.2 Spider dev execution accuracy (1,034 questions)
 
-### 11.5 Where the claims stand
+| model | accuracy | change vs base | right that base missed / wrong that base got | p-value (corrected) |
+|---|---|---|---|---|
+| base (no fine-tuning) | **74.95%** | | | |
+| `qv_r8` | 75.92% | +0.97 | +77 / −67 | 0.900 |
+| `qv_r4` | 75.92% | +0.97 | +76 / −66 | 0.900 |
+| `qv_r16` | 77.47% | +2.51 | +85 / −59 | 0.164 |
+| `attn_r8` | 76.79% | +1.84 | +74 / −55 | 0.338 |
+| `all7_r8` | **77.56%** | +2.61 | +88 / −61 | 0.164 |
+
+The full table, with confidence intervals and more comparisons, is in `results/eval/summary.md`.
+
+### 12.3 How to read it
+
+**Is a 2.5-point gain real?** All six models answered the same 1,034 questions, so they can be
+compared question by question. Only the questions where two models *disagree* carry information. The
+**McNemar test** asks whether "fine-tune right, base wrong" outnumbers "base right, fine-tune wrong"
+by more than chance would. For `qv_r16` and `all7_r8` the raw p-value is about 0.035 (below the usual
+0.05 line). But five fine-tunes were each compared with the base, and testing five things raises the
+odds that one looks good by luck. After the **Holm correction** for that, no p-value is below 0.05.
+So the honest summary is: *every fine-tune scored higher, the best by about 2.5 points, but the gain is
+not statistically conclusive.*
+
+**Fine-tuning reshuffles more than it adds.** Every run fixes 74–88 questions the base got wrong and
+breaks 55–67 it got right. The net gain is the small difference between two big numbers.
+
+**Why so little headroom? The base has probably seen Spider.** Untuned, the base already writes the
+dataset's odd formatting, like `Country ,  COUNT(*)` with the double space, which is a fingerprint of
+Spider's answer key. Spider has been public since 2018, so it is very likely in Qwen2.5-Coder's
+pretraining data. A 75% baseline leaves little for fine-tuning to add, and the remaining gains come
+from matching the dataset's conventions.
+
+**What fine-tuning actually changed** (from reading questions that flipped):
+
+- *Gains* come from adopting Spider's conventions: `INTERSECT` for "both X and Y", `= 'Brazil'` instead
+  of `LIKE '%Brazil%'`, copying values as the question writes them ("Virginia", not "VA"), and fewer
+  unnecessary joins.
+- *Losses* come mostly from inventing column names in Spider's lower_snake_case style that don't exist
+  in the schema (`pet_type` when the real column is `PetType`), and occasionally from dropping a needed
+  `DISTINCT`.
+
+**The ablations:**
+
+- *Rank on q/v:* r4 = r8 exactly (785 correct each), and r16 beats r8 on 24 questions versus 8
+  (p = 0.007 before correction). Bigger rank helped at 16, but not between 4 and 8.
+- *Target set:* at rank 8, adding k/o (`attn_r8`) and the MLP (`all7_r8`) scored higher than q/v
+  alone (+35/−26 and +50/−33 flipped questions), but neither difference is significant (p = 0.31 and
+  0.08). And `all7_r8`, with 4× the parameters of `qv_r16` and much lower training loss, ties it
+  (40 vs 39 flipped questions).
+- *Caveat:* each config was trained **once** (one random seed). Without repeats, part of any gap
+  between two fine-tunes could be noise from training itself.
+
+**The column-order check.** Rescoring with any column order allowed (as the official eval does) raises
+every model by 2.3–3.2 points, the base most of all (74.95 → 78.14). So the strict harness slightly
+*overstates* the fine-tuning gains, not understates them. `qv_r16` and `all7_r8` swap first and second
+place; the rest of the order is unchanged.
+
+### 12.4 Where the claims stand
 
 | claim | status |
 |---|---|
 | From-scratch LoRA, bit-identical to peft (fp32, forward + backward) | ✅ earned |
 | Identical training trajectory vs peft (toy, 200 steps) | ✅ earned |
 | Bit-identical to peft on the QLoRA path (4-bit, incl. non-power-of-two scaling) | ✅ earned |
-| Fine-tuned 7B on an 8 GB laptop GPU via your own QLoRA loop | ⏳ run #1 in progress |
-| Improvement in execution accuracy over the base model on Spider dev | ⬜ Week 3 |
-| Rank and target-set ablation findings | ⬜ Weeks 2–3 |
-| Generalization to BIRD-dev | ⬜ Week 3 |
+| Fine-tuned 7B on an 8 GB laptop GPU via your own QLoRA loop | ✅ earned: five runs, peak ≤ 6.74 GB |
+| A rigorous, reproducible execution-accuracy harness | ✅ earned |
+| Improvement in execution accuracy over the base model on Spider dev | ⚠️ measured: +1 to +2.6 points, not statistically conclusive, base likely contaminated |
+| Rank and target-set ablation findings | ⚠️ measured, single seed |
+| Generalization to BIRD-dev | ⬜ not started |
 
 ---
 
-## 12. Glossary
+## 13. What happens next
+
+Status at the end of Session 6: everything is committed on the `dev` branch, and `main` still holds
+only the initial skeleton. Candidate next steps, roughly in order of value:
+
+1. **A public-facing README at the repo root**, then merge `dev` into `main` (the first "v1" push).
+   `docs/README.md` is a private planning log, not a front page.
+2. **Difficulty breakdown.** Vendor Spider's official `process_sql.py` + `eval_hardness()` so accuracy
+   is split into easy / medium / hard / extra. It shows *where* fine-tuning helps and hurts.
+3. **BIRD-dev zero-shot**, base vs best adapter. BIRD is newer and harder, so it is less likely to be
+   contaminated, and it tests whether the gains generalize. Needs the download and a schema-renderer
+   check.
+4. **Seed repeats** of one config (e.g. `qv_r16` with 2 more seeds, ~2.3 h each) to measure how much
+   accuracy moves from training noise alone.
+5. **Optional:** switch the harness to column-order-invariant comparison (the official convention).
+   `summarize_eval.py` already reports it as a robustness column.
+6. **Write-up** (Week 4): a mini-paper. Motivation → method (LoRA, QLoRA, parity methodology) →
+   results (accuracy table, significance, contamination caveat) → ablations → limitations. Figures:
+   toy parity curve, training loss curves, ablation accuracy plot. **Lead with parity.**
+7. **Dropped** (recommended): the "peft-fine-tuned 7B" comparison row. Parity already shows the two
+   implementations compute the same thing, so a second 2.3 h training run adds nothing.
+
+---
+
+## 14. Glossary
 
 | term | meaning |
 |---|---|
@@ -529,3 +639,14 @@ The `eval/` code exists but has known gaps. These must be fixed **before** any n
 | **Execution accuracy** | Fraction of questions where the generated SQL returns the same rows as the gold SQL. |
 | **Held-out set** | Data never used for training or tuning; kept to measure true performance. |
 | **Ablation** | Changing one setting at a time to see what it contributes. |
+| **Greedy decoding** | Always generate the single most likely next token; deterministic, so evals are repeatable. |
+| **Read-only database** | Opened so any write (`DROP`, `DELETE`, …) fails instead of changing the file. |
+| **Gold preflight** | Running every correct ("gold") query before the eval starts, to catch broken setups in seconds. |
+| **Provenance** | A record of exactly which checkpoint, config and code commit produced a number. |
+| **Paired comparison** | Comparing two models on the *same* questions, one question at a time. |
+| **McNemar test** | A significance test for paired right/wrong results; uses only the questions where the two models disagree. |
+| **p-value** | Roughly: how likely a difference this big would be by pure chance. Below 0.05 is the usual "significant" line. |
+| **Multiple-comparison (Holm) correction** | Adjusts p-values upward when several things are tested, so one lucky result isn't mistaken for a real effect. |
+| **Bootstrap confidence interval** | Resample the questions thousands of times to see the range the accuracy difference plausibly lies in. |
+| **Seed** | The number that fixes training's randomness (data order, dropout). One seed = one training run per config. |
+| **Contamination** | When a benchmark's test data was in the model's pretraining data, inflating its score. |
