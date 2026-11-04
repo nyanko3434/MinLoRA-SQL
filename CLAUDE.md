@@ -8,7 +8,7 @@ A from-scratch LoRA implementation validated numerically against HuggingFace `pe
 text-to-SQL fine-tuning on Spider with an execution-based eval harness. The package is `lora_sql`,
 laid out as a `src/` package and installed editable into `.venv`.
 
-**Status: Session 6 COMPLETE (all five configs trained and scored on Spider dev).** The core LoRA implementation and its verification are done and
+**Status: Session 7 COMPLETE (Spider difficulty breakdown; all five configs trained and scored on Spider dev in Session 6).** The core LoRA implementation and its verification are done and
 committed — `src/lora_sql/lora.py` (`LoRALinear`, `inject_lora`, `lora_param_stats`),
 `tests/test_lora_injection.py` (10 passing), and `tests/test_lora_parity.py` (8 passing:
 forward + backward numerical parity vs `peft`, fp32, atol=1e-6). Session 4 added `src/lora_sql/data.py`
@@ -41,15 +41,22 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
     bootstrap CI + a column-order robustness check). Regenerate it rather than hand-editing.
 - **v1 packaging done:** public root `README.md`, MIT `LICENSE`, the planning log renamed to
   `docs/PROJECT_LOG.md`, and `requirements.txt` made portable (`-e .`, cu121 wheel index).
-- Next (Session 7): merge the `dev` → `main` PR if it isn't merged yet. Then the user picks
-  among difficulty breakdown, BIRD-dev, seed repeats and the write-up. When results change,
-  update the root README's tables too.
+- **v1 is merged to `main`** (PR #1, merge commit 3bbe832). Work continues on `dev`.
+- Next (Session 8): the user picks among BIRD-dev, seed repeats and the write-up. When results
+  change, update the root README's tables too.
 - **Docs to keep current with every status-changing chunk:** `README.md` (public front page:
   results table, reproduce steps), `docs/PROJECT_LOG.md` (private planning log / knowledge base,
   CURRENT STATE block at the top), this file, and `docs/MinLoRA-SQL_explained.md`
   (the user's from-zero explainer: §6 session table, §12 results, §13 next steps).
-**`pytest -v` -> 85 passing** (10 injection + 8 parity + 8 data + 10 4-bit + 14 config + 4 qlora
-+ 6 checkpoint + 6 train + 16 eval_execute (CPU) + 3 eval_runner (GPU)).
+- **Session 7: Spider difficulty breakdown done.**
+  - `eval_hardness` is vendored into `eval/metrics.py`, and `runner.py` writes a real
+    `difficulty` per result.
+  - `summarize_eval.py` joins the tiers onto the six committed results by index and writes an
+    "Accuracy by difficulty" section into summary.md.
+  - Result: the gain sits mostly in medium (net +10 to +20 questions per run). Extra churns
+    23–27% with near-zero net change. Easy is near ceiling (base 90.3%).
+**`pytest -v` -> 95 passing** (10 injection + 8 parity + 8 data + 10 4-bit + 14 config + 4 qlora
++ 6 checkpoint + 6 train + 16 eval_execute (CPU) + 10 eval_metrics (CPU) + 3 eval_runner (GPU)).
 
 **Eval configs** (plain YAML dicts read by `eval/runner.py`). Keys: `model.{name_or_path, quant,
 double_quant, dtype}`, `data.{eval_path, db_dir}`, `eval.{max_new_tokens, results_path}`. There is
@@ -68,7 +75,8 @@ this in code and also rejects `test*.json` eval paths.
 qv_r16, attn_r8, all7_r8), `configs/week1_parity.yaml`, `configs/eval/coder7b_spider_dev.yaml`, all
 test files, `pyproject.toml`, and the `scripts/` files (`check_env.py`, `check_spider_database.py`,
 `toy_train.py`, `plot_toy.py`, `probe_memory.py`, `train_chain.sh`, `plot_train.py`,
-`eval_chain.sh`, `summarize_eval.py`).
+`eval_chain.sh`, `summarize_eval.py`), and `licenses/spider-LICENSE` (Apache-2.0, for the vendored
+Spider code in `metrics.py`).
 
 ## checkpoint.py / train.py (implemented Session 5 Half 2)
 
@@ -165,10 +173,11 @@ python scripts/summarize_eval.py
 HF_HUB_OFFLINE=1 python scripts/probe_memory.py --config configs/train/qv_r8.yaml --seq-lens 512 1024 1536 2048 2560
 
 # Tests: pytest is in requirements.txt and configured in pyproject.toml
-# (testpaths = ["tests"]). 85 passing as of Session 6 (incl. 16 eval_execute CPU + 3 eval_runner GPU).
+# (testpaths = ["tests"]). 95 passing as of Session 7 (incl. 16 eval_execute + 10 eval_metrics CPU,
+# 3 eval_runner GPU).
 pytest -v
 # CPU-only subset: safe while training holds the GPU
-CUDA_VISIBLE_DEVICES="" pytest -v tests/test_eval_execute.py tests/test_config.py tests/test_data.py
+CUDA_VISIBLE_DEVICES="" pytest -v tests/test_eval_metrics.py tests/test_eval_execute.py tests/test_config.py tests/test_data.py
 pytest -v tests/test_lora_parity.py   # just the parity suite
 pytest -v -s tests/test_lora_4bit.py  # 4-bit unit + QLoRA parity vs peft; -s prints max abs diffs
 ```
@@ -217,8 +226,18 @@ separation of concerns — keep new eval code in the matching module rather than
     the test-suite convention). Columns are compared positionally, with no permutation search, so
     it is slightly stricter than the official test-suite eval.
   - `execute_and_compare(db, pred_sql, gold_rows, ordered) -> (correct, exec_error)`.
-- `metrics.py` — pure aggregation over `EvalResult` dataclasses into a `MetricsSummary`, with an
-  overall accuracy plus a breakdown by `difficulty` (defaults to `"unknown"` if not set upstream).
+- `metrics.py` — aggregation over `EvalResult` dataclasses into a `MetricsSummary`, with an
+  overall accuracy plus a breakdown by `difficulty`. It also holds the Spider difficulty code:
+  - `eval_hardness(sql)` + helpers, vendored verbatim from taoyds/spider `evaluation.py` (pinned
+    commit, Apache-2.0, license copy in `licenses/spider-LICENSE`). Upstream quirks are kept on
+    purpose; "fixing" them breaks the official split.
+  - It runs on the parsed `sql` dict that ships with each dev.json record, so `process_sql.py` is
+    not vendored.
+  - `spider_difficulties(path) -> list[str]` returns one tier per record, in file order (the same
+    order as `load_examples`), and `"unknown"` for records without `sql` (e.g. BIRD).
+  - Dev splits 248 / 446 / 174 / 166, and a CPU test enforces it.
+  - `runner.run_eval` joins the tiers onto the examples by index and passes `difficulty=` into
+    `EvalResult`.
 
 ## Eval-harness hardening
 
@@ -228,10 +247,10 @@ NULLs, so the old `sorted()` compare could crash a real eval); connection `try/f
 preflight (all 1,034 dev gold queries execute in 1.6 s); plus a query deadline and incremental
 `.jsonl` output.
 
-Still open:
-- Wiring `eval_hardness()` (deferred by decision) is a two-place change: vendor taoyds/spider's
-  `process_sql.py` + `eval_hardness`, compute difficulty, AND thread it into the `EvalResult(...)`
-  construction in `runner.py` (currently omitted, so `difficulty` is `"unknown"`).
+Difficulty (Session 7): wired into the runner for future evals. The six committed result JSONs
+(Session 6) predate this and carry `"difficulty": "unknown"`. Do not rewrite them:
+`summarize_eval.py` joins the tiers by index against dev.json, after asserting that every row
+matches on db_id / question / gold SQL.
 
 ## Model roles
 - `Qwen/Qwen2.5-0.5B-Instruct` — Week 1 numerical-parity fixture ONLY. Never fine-tuned.

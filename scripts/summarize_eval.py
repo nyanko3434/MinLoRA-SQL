@@ -10,6 +10,11 @@ discordant pairs, Holm-adjusted across the comparisons with base, and a 95% pair
 (5,000 resamples, seed 0) on the EX difference. The robustness column re-executes every prediction
 (read-only, CPU) and allows any column permutation, as the official test-suite eval does; the
 harness itself compares columns positionally.
+
+The accuracy-by-difficulty tables use Spider's official easy / medium / hard / extra tiers
+(metrics.spider_difficulties). The Session 6 result files predate difficulty in the runner, so the
+tiers are joined by index against dev.json, after asserting every row matches it on db_id, question
+and gold SQL. The committed result files are never rewritten.
 """
 import itertools
 import json
@@ -18,9 +23,11 @@ from math import comb
 from pathlib import Path
 
 from lora_sql.eval.execute import ExecutionError, order_matters, results_match, run_query
+from lora_sql.eval.metrics import DIFFICULTIES, spider_difficulties
 
 RUNS = ["qv_r8", "qv_r4", "qv_r16", "attn_r8", "all7_r8"]
 NAMES = ["base", *RUNS]
+DEV = Path("data/spider_data/dev.json")
 DB_DIR = Path("data/spider_data/database")
 OUT = Path("results/eval/summary.md")
 N_BOOT = 5000
@@ -84,6 +91,14 @@ def main():
     for n in NAMES:
         assert [r["question"] for r in evals[n][1]] == questions, f"{n} is not in base's question order"
     n_q = len(questions)
+    dev = json.loads(DEV.read_text())
+    assert len(dev) == n_q, f"dev.json has {len(dev)} records, the evals have {n_q}"
+    for n in NAMES:
+        for i, (r, d) in enumerate(zip(evals[n][1], dev)):
+            assert (r["db_id"], r["question"], r["gold_sql"]) == (d["db_id"], d["question"], d["query"]), (
+                f"{n} row {i} does not match dev.json; the index join for difficulty would be wrong"
+            )
+    difficulty = spider_difficulties(DEV)
     correct = {n: [bool(r["correct"]) for r in evals[n][1]] for n in NAMES}
     gold_rows = [run_query(db_path(r["db_id"]), r["gold_sql"]) for r in evals["base"][1]]
     perm = {n: permutation_correct(evals[n][1], gold_rows) for n in NAMES}
@@ -140,6 +155,53 @@ def main():
         wins, losses, p = paired(a, b)
         lines.append(f"| {a} vs {b} | +{wins} / −{losses} | {p:.3f} |")
 
+    tier_idx = {t: [i for i in range(n_q) if difficulty[i] == t] for t in DIFFICULTIES}
+    assert sum(map(len, tier_idx.values())) == n_q, "a dev question has no Spider difficulty"
+
+    def tier_ex(n, t):
+        return 100 * sum(correct[n][i] for i in tier_idx[t]) / len(tier_idx[t])
+
+    header = " | ".join(f"{t} (n={len(tier_idx[t])})" for t in DIFFICULTIES)
+    lines += ["", "## Accuracy by difficulty", "",
+              "Spider's official tiers, from taoyds/spider `eval_hardness` on each gold query (vendored in "
+              "`src/lora_sql/eval/metrics.py`). Cells are EX % with the change vs base in parentheses.", "",
+              f"| run | {header} | all (n={n_q}) |", "|---|" + "---|" * (len(DIFFICULTIES) + 1)]
+    for n in NAMES:
+        cells = [f"{tier_ex(n, t):.2f}" + ("" if n == "base" else f" ({tier_ex(n, t) - tier_ex('base', t):+.2f})")
+                 for t in DIFFICULTIES]
+        all_cell = f"{ex[n]:.2f}" + ("" if n == "base" else f" ({ex[n] - ex['base']:+.2f})")
+        lines.append(f"| {n} | {' | '.join(cells)} | {all_cell} |")
+
+    def tier_won_lost(n, t):
+        return (sum(correct[n][i] and not correct["base"][i] for i in tier_idx[t]),
+                sum(correct["base"][i] and not correct[n][i] for i in tier_idx[t]))
+
+    lines += ["", "Questions won / lost vs base, by tier:", "",
+              f"| run | {' | '.join(DIFFICULTIES)} |", "|---|" + "---|" * len(DIFFICULTIES)]
+    for n in RUNS:
+        lines.append(f"| {n} | " + " | ".join("+{} / −{}".format(*tier_won_lost(n, t)) for t in DIFFICULTIES) + " |")
+    def difficulty_bullet():
+        net = {n: {t: (lambda w, l: w - l)(*tier_won_lost(n, t)) for t in DIFFICULTIES} for n in RUNS}
+        med = [net[n]["medium"] for n in RUNS]
+        rest = [sum(v for t, v in net[n].items() if t != "medium") for n in RUNS]
+        medium_only = [n for n in RUNS if sum(v for t, v in net[n].items() if t != "medium") <= 0]
+        churn = {t: [100 * sum(tier_won_lost(n, t)) / len(tier_idx[t]) for n in RUNS] for t in DIFFICULTIES}
+        return (
+            f"- **Where the gain sits: medium.** Net of won − lost vs base, every run gains {min(med):+d} to "
+            f"{max(med):+d} questions on medium and {min(rest):+d} to {max(rest):+d} on easy, hard and extra "
+            f"combined. {', '.join(medium_only)} gain{'s' if len(medium_only) == 1 else ''} only on medium. "
+            f"Extra has the most churn: {min(churn['extra']):.0f}–{max(churn['extra']):.0f}% of its questions "
+            f"flip either way (against {min(churn['medium']):.0f}–{max(churn['medium']):.0f}% on medium and "
+            f"{min(churn['easy']):.0f}–{max(churn['easy']):.0f}% on easy), yet its net change is only "
+            f"{min(net[n]['extra'] for n in RUNS):+d} to {max(net[n]['extra'] for n in RUNS):+d} questions. "
+            f"Easy is near ceiling: base scores {tier_ex('base', 'easy'):.1f}% there and "
+            f"{tier_ex('base', 'extra'):.1f}% on extra."
+        )
+
+    smallest = min(len(v) for v in tier_idx.values())
+    lines += ["", f"One question is {100 / smallest:.2f} points in the smallest tier "
+              f"(n={smallest}), so the per-tier gaps are descriptive, not tested."]
+
     all_right = sum(all(correct[n][i] for n in NAMES) for i in range(n_q))
     none_right = sum(not any(correct[n][i] for n in NAMES) for i in range(n_q))
     wins = [vs_base[n][0] for n in RUNS]
@@ -176,7 +238,7 @@ def main():
         "literals copied as written, and fewer needless joins.",
         "  - It loses by inventing Spider-style snake_case column names that aren't in the schema (`pet_type` for "
         "`PetType`, which surfaces as `no such column`), and occasionally by dropping a needed DISTINCT.",
-        "- Difficulty breakdown (easy/medium/hard/extra) is not computed yet; see CLAUDE.md, Eval-harness hardening.",
+        difficulty_bullet(),
         "",
     ]
     OUT.write_text("\n".join(lines))
