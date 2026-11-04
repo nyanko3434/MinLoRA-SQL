@@ -1,0 +1,21 @@
+# Zero-shot generalization eval: Qwen2.5-Coder-7B-Instruct on BIRD dev (1,534, release
+# dev_20240627), same nf4 loader as training. BIRD is never trained on.
+# Base model: no --lora-checkpoint. Fine-tuned: --lora-checkpoint runs/<run>/final.
+# Pass --out results/eval/bird/<name>.json per run.
+model:
+  name_or_path: Qwen/Qwen2.5-Coder-7B-Instruct
+  quant: nf4              # nf4 | none
+  double_quant: true
+  dtype: bfloat16
+data:
+  format: bird
+  eval_path: data/bird/dev_20240627/dev.json
+  tables_path: data/bird/dev_20240627/dev_tables.json
+  db_dir: data/bird/dev_20240627/dev_databases   # runner.check_held_out: bird -> dev_databases/
+  use_evidence: true      # standard BIRD setting: "\nHint: <evidence>" appended to the question
+  # Two gold queries exceed 30 s (#518: 39 s, #701: 188 s). The longer deadline is for gold only;
+  # predictions keep the runner's 30 s, as in BIRD's official eval.
+  gold_timeout_s: 300
+eval:
+  max_new_tokens: 640     # longest BIRD dev gold SQL is 541 tokens (p99 142)
+  results_path: results/eval/bird/coder7b_base.json

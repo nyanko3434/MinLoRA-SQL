@@ -19,6 +19,7 @@ from lora_sql.data import (
     build_train_example,
     encode_prompt,
     format_prompt,
+    load_bird_examples,
     load_examples,
     render_schema,
 )
@@ -138,6 +139,73 @@ def test_load_examples_default_tables_path_resolves_sibling_tables_json(tmp_path
     assert "CREATE TABLE widget (" in examples[0].schema
     assert "id INTEGER" in examples[0].schema
     assert "PRIMARY KEY (id)" in examples[0].schema
+
+
+# A BIRD-style tables.json entry: BIRD type names, and a composite primary key given as a nested
+# list (debit_card_specializing, formula_1, ... in the real BIRD dev).
+BIRD_TABLES = [
+    {
+        "db_id": "shop",
+        "column_names_original": [[-1, "*"], [0, "CustomerID"], [0, "Joined"], [1, "CustomerID"],
+                                  [1, "Date"], [1, "Amount"], [1, "Paid At"]],
+        "column_types": ["text", "integer", "date", "integer", "date", "real", "datetime"],
+        "table_names_original": ["customers", "yearmonth"],
+        "primary_keys": [1, [3, 4]],
+        "foreign_keys": [[3, 1]],
+    }
+]
+GOLDEN_BIRD_SHOP_SCHEMA = """CREATE TABLE customers (
+  CustomerID INTEGER,
+  Joined DATE,
+  PRIMARY KEY (CustomerID)
+);
+
+CREATE TABLE yearmonth (
+  CustomerID INTEGER,
+  Date DATE,
+  Amount REAL,
+  "Paid At" DATETIME,
+  PRIMARY KEY (CustomerID, Date),
+  FOREIGN KEY (CustomerID) REFERENCES customers(CustomerID)
+);"""
+
+
+def test_render_schema_bird_types_and_composite_primary_key():
+    assert render_schema(BIRD_TABLES[0]) == GOLDEN_BIRD_SHOP_SCHEMA
+
+
+def test_load_bird_examples_evidence_and_sql_key(tmp_path):
+    records = [
+        {"db_id": "shop", "question": "How many customers?", "evidence": "customers refers to CustomerID",
+         "SQL": "SELECT COUNT(CustomerID) FROM customers", "difficulty": "simple"},
+        {"db_id": "shop", "question": "Total amount?", "evidence": "",
+         "SQL": "SELECT SUM(Amount) FROM yearmonth", "difficulty": "moderate"},
+    ]
+    (tmp_path / "dev_tables.json").write_text(json.dumps(BIRD_TABLES), encoding="utf-8")
+    (tmp_path / "dev.json").write_text(json.dumps(records), encoding="utf-8")
+
+    with_hint = load_bird_examples(str(tmp_path / "dev.json"), str(tmp_path / "dev_tables.json"))
+    assert [e.query for e in with_hint] == [r["SQL"] for r in records]
+    assert with_hint[0].question == "How many customers?\nHint: customers refers to CustomerID"
+    assert with_hint[1].question == "Total amount?"  # empty evidence adds no "Hint:" line
+    assert with_hint[0].schema == GOLDEN_BIRD_SHOP_SCHEMA
+    assert with_hint[0].schema is with_hint[1].schema
+
+    no_hint = load_bird_examples(str(tmp_path / "dev.json"), str(tmp_path / "dev_tables.json"), use_evidence=False)
+    assert [e.question for e in no_hint] == [r["question"] for r in records]
+    # The hint reaches the prompt through the question; the template itself is unchanged.
+    assert "Hint: customers refers to CustomerID" in format_prompt(with_hint[0])
+
+
+BIRD_DEV = REPO_ROOT / "data" / "bird" / "dev_20240627"
+
+
+@pytest.mark.skipif(not (BIRD_DEV / "dev.json").exists(), reason="BIRD dev not downloaded")
+def test_real_bird_dev_loads():
+    examples = load_bird_examples(str(BIRD_DEV / "dev.json"), str(BIRD_DEV / "dev_tables.json"))
+    assert len(examples) == 1534
+    assert len({e.db_id for e in examples}) == 11
+    assert sum("\nHint: " in e.question for e in examples) == 1534 - 148  # 148 records have no evidence
 
 
 @pytest.fixture(scope="module")

@@ -124,12 +124,19 @@ def eval_hardness(sql):
 # --------------------------------- end of vendored Spider code ---------------------------------
 
 
-def spider_difficulties(path) -> list[str]:
-    """Spider difficulty for every record of an eval JSON, in file order (the same order
-    data.load_examples returns). Records without a parsed `sql` dict (e.g. a non-Spider eval set)
-    get "unknown"."""
+def record_difficulty(record: dict) -> str:
+    """Spider: the official tier from the parsed `sql` dict. BIRD: its own `difficulty` label
+    (simple / moderate / challenging). Anything else: "unknown"."""
+    if "sql" in record:
+        return eval_hardness(record["sql"])
+    return record.get("difficulty") or "unknown"
+
+
+def eval_difficulties(path) -> list[str]:
+    """Difficulty for every record of an eval JSON, in file order (the same order the data
+    loaders return)."""
     records = json.loads(Path(path).read_text(encoding="utf-8"))
-    return [eval_hardness(r["sql"]) if "sql" in r else "unknown" for r in records]
+    return [record_difficulty(r) for r in records]
 
 
 @dataclass

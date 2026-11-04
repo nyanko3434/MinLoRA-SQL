@@ -12,7 +12,7 @@ discordant pairs, Holm-adjusted across the comparisons with base, and a 95% pair
 harness itself compares columns positionally.
 
 The accuracy-by-difficulty tables use Spider's official easy / medium / hard / extra tiers
-(metrics.spider_difficulties). The Session 6 result files predate difficulty in the runner, so the
+(metrics.eval_difficulties). The Session 6 result files predate difficulty in the runner, so the
 tiers are joined by index against dev.json, after asserting every row matches it on db_id, question
 and gold SQL. The committed result files are never rewritten.
 """
@@ -23,7 +23,7 @@ from math import comb
 from pathlib import Path
 
 from lora_sql.eval.execute import ExecutionError, order_matters, results_match, run_query
-from lora_sql.eval.metrics import DIFFICULTIES, spider_difficulties
+from lora_sql.eval.metrics import DIFFICULTIES, eval_difficulties
 
 RUNS = ["qv_r8", "qv_r4", "qv_r16", "attn_r8", "all7_r8"]
 NAMES = ["base", *RUNS]
@@ -98,7 +98,7 @@ def main():
             assert (r["db_id"], r["question"], r["gold_sql"]) == (d["db_id"], d["question"], d["query"]), (
                 f"{n} row {i} does not match dev.json; the index join for difficulty would be wrong"
             )
-    difficulty = spider_difficulties(DEV)
+    difficulty = eval_difficulties(DEV)
     correct = {n: [bool(r["correct"]) for r in evals[n][1]] for n in NAMES}
     gold_rows = [run_query(db_path(r["db_id"]), r["gold_sql"]) for r in evals["base"][1]]
     perm = {n: permutation_correct(evals[n][1], gold_rows) for n in NAMES}

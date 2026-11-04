@@ -648,9 +648,13 @@ steps, roughly in order of value:
    through PR #1.
 2. **Difficulty breakdown (done, Session 7).** Spider's official `eval_hardness()` was copied in, and
    accuracy is split into easy / medium / hard / extra (§12.4). The gain sits mostly in medium.
-3. **BIRD-dev zero-shot**, base vs best adapter. BIRD is newer and harder, so it is less likely to be
-   contaminated, and it tests whether the gains generalize. Needs the download and a schema-renderer
-   check.
+3. **BIRD-dev zero-shot (in progress, Session 8)**, base vs the two best adapters (`qv_r16`,
+   `all7_r8`). BIRD is newer and harder, so it is less likely to be contaminated, and it tests
+   whether the gains generalize.
+   - Done so far: the BIRD dev download (1,534 questions, 11 databases); schema rendering for its
+     composite keys and type names; a BIRD loader that adds each question's expert hint
+     ("evidence") to the question text; and a 20-question smoke test.
+   - Next: the full evals (~1.2 h per model), then the results.
 4. **Seed repeats** of one config (e.g. `qv_r16` with 2 more seeds, ~2.3 h each) to measure how much
    accuracy moves from training noise alone.
 5. **Optional:** switch the harness to column-order-invariant comparison (the official convention).

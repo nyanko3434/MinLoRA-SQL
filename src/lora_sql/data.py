@@ -3,7 +3,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-_TYPE_MAP = {"number": "INTEGER", "text": "TEXT", "time": "TIME", "boolean": "BOOLEAN"}
+# Spider types (number/text/time/boolean/others) plus the BIRD dev type names. Unknown -> TEXT.
+_TYPE_MAP = {"number": "INTEGER", "text": "TEXT", "time": "TIME", "boolean": "BOOLEAN",
+             "integer": "INTEGER", "real": "REAL", "date": "DATE", "datetime": "DATETIME"}
 _UNSAFE_IDENTIFIER = re.compile(r"\W")
 
 PROMPT_TEMPLATE = """You are a SQLite expert. Given the database schema below, write a single SQL query that answers the question.
@@ -35,7 +37,9 @@ def render_schema(table_entry: dict) -> str:
     column_names = table_entry["column_names_original"]
     column_types = table_entry["column_types"]
     table_names = table_entry["table_names_original"]
-    primary_keys = set(table_entry["primary_keys"])
+    # BIRD lists a composite key as a nested list ([[19, 20]]); flattened, its columns land in the
+    # owning table's single PRIMARY KEY (...) line. Spider's keys are flat ints, so it is unchanged.
+    primary_keys = {c for pk in table_entry["primary_keys"] for c in (pk if isinstance(pk, list) else [pk])}
     foreign_keys = table_entry["foreign_keys"]
 
     blocks = []
@@ -124,4 +128,32 @@ def load_examples(path: str, tables_path: str | None = None) -> list[Example]:
             schema_cache[db_id] = render_schema(tables_by_db_id[db_id])
         examples.append(Example(db_id=db_id, question=record["question"],
                                  query=record["query"], schema=schema_cache[db_id]))
+    return examples
+
+
+def bird_question(record: dict, use_evidence: bool = True) -> str:
+    """BIRD's question text, with the expert evidence hint appended when present (the standard
+    BIRD setting). It goes in Example.question, so the prompt template itself is unchanged."""
+    evidence = (record.get("evidence") or "").strip()
+    if use_evidence and evidence:
+        return f"{record['question']}\nHint: {evidence}"
+    return record["question"]
+
+
+def load_bird_examples(path: str, tables_path: str, use_evidence: bool = True) -> list[Example]:
+    """BIRD dev records (gold SQL under "SQL", schemas in dev_tables.json) as Examples, in file
+    order. Zero-shot eval only: BIRD is never a training file."""
+    with open(tables_path, "r", encoding="utf-8") as f:
+        tables_by_db_id = {t["db_id"]: t for t in json.load(f)}
+    with open(path, "r", encoding="utf-8") as f:
+        records = json.load(f)
+
+    schema_cache: dict[str, str] = {}
+    examples = []
+    for record in records:
+        db_id = record["db_id"]
+        if db_id not in schema_cache:
+            schema_cache[db_id] = render_schema(tables_by_db_id[db_id])
+        examples.append(Example(db_id=db_id, question=bird_question(record, use_evidence),
+                                 query=record["SQL"], schema=schema_cache[db_id]))
     return examples

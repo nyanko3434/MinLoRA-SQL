@@ -125,7 +125,26 @@ def test_held_out_guard():
         check_held_out(_cfg(db_dir="data/spider_data/test_database"))
 
 
-@pytest.mark.parametrize("path", ["configs/week1_parity.yaml", "configs/eval/coder7b_spider_dev.yaml"])
+def _bird_cfg(eval_path="data/bird/dev_20240627/dev.json", db_dir="data/bird/dev_20240627/dev_databases"):
+    return {"data": {"format": "bird", "eval_path": eval_path, "db_dir": db_dir}}
+
+
+def test_held_out_guard_bird():
+    check_held_out(_bird_cfg())
+    with pytest.raises(ValueError, match="held out"):
+        check_held_out(_bird_cfg(eval_path="data/bird/test.json"))
+    # Each format runs only against its own database directory.
+    with pytest.raises(ValueError, match="dev_databases"):
+        check_held_out(_bird_cfg(db_dir="data/spider_data/database"))
+    with pytest.raises(ValueError, match="database"):
+        check_held_out({"data": {"format": "spider", "eval_path": "data/spider_data/dev.json",
+                                 "db_dir": "data/bird/dev_20240627/dev_databases"}})
+    with pytest.raises(ValueError, match="data.format"):
+        check_held_out({"data": {"format": "wikisql", "eval_path": "dev.json", "db_dir": "database"}})
+
+
+@pytest.mark.parametrize("path", ["configs/week1_parity.yaml", "configs/eval/coder7b_spider_dev.yaml",
+                                  "configs/eval/coder7b_bird_dev.yaml"])
 def test_eval_configs_pass_guard(path):
     cfg = load_config(ROOT / path)
     check_held_out(cfg)
