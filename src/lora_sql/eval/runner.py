@@ -22,7 +22,7 @@ from lora_sql.checkpoint import SIDECAR_FILE, git_commit, load_lora
 from lora_sql.config import ModelConfig
 from lora_sql.data import Example, encode_prompt, load_examples
 from lora_sql.eval.execute import DEFAULT_TIMEOUT_S, ExecutionError, execute_and_compare, order_matters, run_query
-from lora_sql.eval.metrics import EvalResult, compute_metrics
+from lora_sql.eval.metrics import EvalResult, compute_metrics, spider_difficulties
 from lora_sql.qlora import load_model
 
 
@@ -98,8 +98,11 @@ def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = No
              limit: int | None = None) -> dict:
     check_held_out(cfg)
     examples = load_examples(cfg["data"]["eval_path"])
+    # Same file, same order as load_examples, so the two lists join by index.
+    difficulties = spider_difficulties(cfg["data"]["eval_path"])
+    assert len(difficulties) == len(examples), "difficulty list does not line up with the examples"
     if limit is not None:
-        examples = examples[:limit]
+        examples, difficulties = examples[:limit], difficulties[:limit]
     db_dir = Path(cfg["data"]["db_dir"])
 
     t0 = time.monotonic()
@@ -113,7 +116,7 @@ def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = No
     results, n_exec_errors = [], 0
     # One line per example as it goes: a crash late in a long eval keeps what finished.
     with open(output_path.with_suffix(".jsonl"), "w", encoding="utf-8") as partial:
-        for i, (example, gold) in enumerate(zip(examples, gold_rows), start=1):
+        for i, (example, gold, difficulty) in enumerate(zip(examples, gold_rows, difficulties), start=1):
             predicted_sql = generate_sql(model, tokenizer, example, cfg["eval"]["max_new_tokens"], model.device)
             correct, exec_error = execute_and_compare(
                 _db_path(db_dir, example.db_id), predicted_sql, gold, order_matters(example.query)
@@ -125,6 +128,7 @@ def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = No
                 predicted_sql=predicted_sql,
                 gold_sql=example.query,
                 correct=correct,
+                difficulty=difficulty,
             )
             results.append(result)
             partial.write(json.dumps({**vars(result), "exec_error": exec_error}) + "\n")
