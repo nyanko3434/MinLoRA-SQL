@@ -43,12 +43,37 @@ intervals, pairwise comparisons between configurations and a column-order robust
 [`results/eval/summary.md`](results/eval/summary.md), which is generated from the committed
 per-question results by `scripts/summarize_eval.py`.
 
+### Accuracy by difficulty
+
+Spider assigns each question one of four official difficulty tiers by counting the SQL components
+of its gold query. Here the tiers come from the official `eval_hardness` function, vendored from
+[taoyds/spider](https://github.com/taoyds/spider). Cells show dev EX (%) with the change against
+the base model in parentheses.
+
+| Model | Easy (248) | Medium (446) | Hard (174) | Extra (166) | All (1,034) |
+|---|---|---|---|---|---|
+| Base (no adapter) | 90.32 | 75.34 | 70.11 | 56.02 | 74.95 |
+| `qv_r4` | 89.52 (−0.81) | 78.70 (+3.36) | 69.54 (−0.57) | 54.82 (−1.20) | 75.92 (+0.97) |
+| `qv_r8` | 89.92 (−0.40) | 78.25 (+2.91) | 68.97 (−1.15) | 56.02 (+0.00) | 75.92 (+0.97) |
+| `qv_r16` | 90.32 (+0.00) | 79.82 (+4.48) | 72.41 (+2.30) | 57.23 (+1.20) | 77.47 (+2.51) |
+| `attn_r8` | 90.73 (+0.40) | 77.58 (+2.24) | 72.41 (+2.30) | 58.43 (+2.41) | 76.79 (+1.84) |
+| `all7_r8` | 91.13 (+0.81) | 79.37 (+4.04) | 72.99 (+2.87) | 57.23 (+1.20) | 77.56 (+2.61) |
+
+In the smallest tier one question is worth 0.6 points, so the per-tier differences are descriptive
+and are not tested for significance. Per-tier won / lost counts are in
+[`results/eval/summary.md`](results/eval/summary.md).
+
 ### Findings
 
 - **Every configuration improves on the base, but modestly.** The two best configurations gain
   about 2.5 points, with nominal p ≈ 0.035. No gain survives Holm correction at the 0.05 level.
 - **Fine-tuning reshuffles answers more than it adds them.** Each model fixes 74 to 88 questions
   the base got wrong and breaks 55 to 67 it got right.
+- **The gain sits mostly in medium questions.** Counting questions won minus lost against the
+  base, every configuration gains 10 to 20 on medium and between −5 and +9 on the other three tiers
+  combined. For `qv_r4` and `qv_r8` the whole gain is on medium. Extra-hard questions change the
+  most (23–27% flip in one direction or the other) but show almost no net gain. Easy questions are
+  near the ceiling already (90.3% for the base).
 - **Rank.** On the query and value projections, rank 4 and rank 8 are tied (785 correct each).
   Rank 16 outperforms rank 8 on 24 questions against 8 (unadjusted p = 0.007).
 - **Target modules.** Adapting all seven projections gives the lowest training loss by a wide
@@ -156,15 +181,15 @@ src/lora_sql/
   checkpoint.py    save_lora / load_lora with load-time verification
   train.py         the training loop
   eval/            runner.py (generation), execute.py (SQLite execution and comparison),
-                   metrics.py (aggregation)
+                   metrics.py (aggregation, Spider difficulty tiers)
 configs/
   train/           qv_r4, qv_r8, qv_r16, attn_r8, all7_r8
   eval/            coder7b_spider_dev.yaml
   week1_parity.yaml  smoke-test evaluation on the 0.5B model
 scripts/           environment checks, toy parity run, memory probe, training and evaluation
                    chains, plotting, results summary
-tests/             85 tests: injection, fp32 and 4-bit parity, data, configuration, loss,
-                   checkpointing, training loop, evaluation
+tests/             95 tests: injection, fp32 and 4-bit parity, data, configuration, loss,
+                   checkpointing, training loop, evaluation, difficulty tiers
 results/           committed evidence: figures, memory probes, training logs, per-question
                    evaluation results, summary table
 docs/              an explanatory guide to the project, from background to results
@@ -214,14 +239,15 @@ takes 20 to 28 minutes.
 - **Execution accuracy on a single database instance.** The official test-suite metric executes
   queries on several database variants to reduce false positives; this harness uses the released
   databases only. Results are therefore not directly comparable with published test-suite numbers.
-- **No difficulty breakdown yet.** Spider's easy, medium, hard and extra-hard tiers are not yet
-  computed.
 - **One database excluded from training.** The 82 `baseball_1` examples exceed the 2,048-token
   limit that the largest configuration fits in memory.
 
 ## License
 
-The code in this repository is released under the [MIT License](LICENSE).
+The code in this repository is released under the [MIT License](LICENSE), except for the Spider
+difficulty function (`eval_hardness` and its helpers) in `src/lora_sql/eval/metrics.py`. That code
+is vendored from [taoyds/spider](https://github.com/taoyds/spider) under the Apache License 2.0;
+its license is in [`licenses/spider-LICENSE`](licenses/spider-LICENSE).
 
 The Spider dataset (CC BY-SA 4.0) and the Qwen2.5 model weights (Apache 2.0) are not redistributed
 here and are subject to their own licenses.

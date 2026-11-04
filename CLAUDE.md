@@ -8,7 +8,7 @@ A from-scratch LoRA implementation validated numerically against HuggingFace `pe
 text-to-SQL fine-tuning on Spider with an execution-based eval harness. The package is `lora_sql`,
 laid out as a `src/` package and installed editable into `.venv`.
 
-**Status: Session 6 COMPLETE (all five configs trained and scored on Spider dev).** The core LoRA implementation and its verification are done and
+**Status: Session 7 COMPLETE (Spider difficulty breakdown; all five configs trained and scored on Spider dev in Session 6).** The core LoRA implementation and its verification are done and
 committed — `src/lora_sql/lora.py` (`LoRALinear`, `inject_lora`, `lora_param_stats`),
 `tests/test_lora_injection.py` (10 passing), and `tests/test_lora_parity.py` (8 passing:
 forward + backward numerical parity vs `peft`, fp32, atol=1e-6). Session 4 added `src/lora_sql/data.py`
@@ -42,15 +42,19 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
 - **v1 packaging done:** public root `README.md`, MIT `LICENSE`, the planning log renamed to
   `docs/PROJECT_LOG.md`, and `requirements.txt` made portable (`-e .`, cu121 wheel index).
 - **v1 is merged to `main`** (PR #1, merge commit 3bbe832). Work continues on `dev`.
-- Next (Session 7): the Spider difficulty breakdown. After that the user picks among BIRD-dev,
-  seed repeats and the write-up. When results change, update the root README's tables too.
+- Next (Session 8): the user picks among BIRD-dev, seed repeats and the write-up. When results
+  change, update the root README's tables too.
 - **Docs to keep current with every status-changing chunk:** `README.md` (public front page:
   results table, reproduce steps), `docs/PROJECT_LOG.md` (private planning log / knowledge base,
   CURRENT STATE block at the top), this file, and `docs/MinLoRA-SQL_explained.md`
   (the user's from-zero explainer: §6 session table, §12 results, §13 next steps).
-- **Session 7 (in progress): Spider difficulty.** `eval_hardness` is vendored into
-  `eval/metrics.py`, and `runner.py` now writes a real `difficulty` per result. The tiers have not
-  yet been joined onto the six committed results; that is `summarize_eval.py`, next chunk.
+- **Session 7: Spider difficulty breakdown done.**
+  - `eval_hardness` is vendored into `eval/metrics.py`, and `runner.py` writes a real
+    `difficulty` per result.
+  - `summarize_eval.py` joins the tiers onto the six committed results by index and writes an
+    "Accuracy by difficulty" section into summary.md.
+  - Result: the gain sits mostly in medium (net +10 to +20 questions per run). Extra churns
+    23–27% with near-zero net change. Easy is near ceiling (base 90.3%).
 **`pytest -v` -> 95 passing** (10 injection + 8 parity + 8 data + 10 4-bit + 14 config + 4 qlora
 + 6 checkpoint + 6 train + 16 eval_execute (CPU) + 10 eval_metrics (CPU) + 3 eval_runner (GPU)).
 
@@ -244,9 +248,9 @@ preflight (all 1,034 dev gold queries execute in 1.6 s); plus a query deadline a
 `.jsonl` output.
 
 Difficulty (Session 7): wired into the runner for future evals. The six committed result JSONs
-(Session 6) predate this and carry `"difficulty": "unknown"`. Do not rewrite them. Instead,
-`summarize_eval.py` will join the tiers by index against dev.json and assert the rows line up
-(next chunk).
+(Session 6) predate this and carry `"difficulty": "unknown"`. Do not rewrite them:
+`summarize_eval.py` joins the tiers by index against dev.json, after asserting that every row
+matches on db_id / question / gold SQL.
 
 ## Model roles
 - `Qwen/Qwen2.5-0.5B-Instruct` — Week 1 numerical-parity fixture ONLY. Never fine-tuned.

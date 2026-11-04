@@ -272,6 +272,7 @@ the differences were tested for statistical significance rather than just eyebal
 | **5, Half 2** | `checkpoint.py` (safe save/load) and `train.py` (the training loop) | **66 tests pass.** 32-example sanity run on the 7B OK |
 | **6** | Run #1 `qv_r8` (2.29 h); reload check on the real 7B; `train_chain.sh` runs the other four overnight (~10 h); loss plot | All five runs finish 536/536 steps, peak memory ≤ 6.74 GB |
 | **6** | Eval harness hardened (§11); `eval_chain.sh` scores base + five runs (~2.5 h); `summarize_eval.py` writes the results table with significance tests | **85 tests pass.** Base 74.95% → best 77.56% (§12) |
+| **7** | v1 merged to `main` (PR #1). Spider's official difficulty function vendored (Apache-2.0); every dev question tagged easy / medium / hard / extra; accuracy broken down by tier, with no re-run (§11, §12.4) | **95 tests pass.** Split matches the official 248 / 446 / 174 / 166; the gain sits mostly in medium |
 
 ---
 
@@ -293,7 +294,8 @@ src/lora_sql/
 ├── train.py        The training loop (§9).
 └── eval/           runner.py (load model + adapter, generate SQL for every dev question, write
                     results), execute.py (run SQL read-only with a time limit, compare result rows),
-                    metrics.py (accuracy, and by difficulty once that is wired in). See §11.
+                    metrics.py (accuracy, by difficulty too; holds Spider's official difficulty
+                    function, copied from the Spider repo under Apache-2.0). See §11.
 
 configs/train/      qv_r8 (reference), qv_r4, qv_r16, attn_r8, all7_r8 — the five runs.
 configs/eval/       coder7b_spider_dev.yaml — the real eval (7B in 4-bit, dev, database/).
@@ -301,8 +303,9 @@ configs/week1_parity.yaml   a quick smoke eval on the 0.5B (results go to runs/,
 scripts/            check_env, toy_train + plot_toy (Session 4 figure), probe_memory (Session 5),
                     train_chain.sh (train several configs back to back), plot_train.py (loss plot),
                     eval_chain.sh (score several runs back to back), summarize_eval.py (results table).
-tests/              85 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint,
-                    train, eval execution (CPU), eval runner (GPU).
+tests/              95 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint,
+                    train, eval execution (CPU), difficulty tiers (CPU), eval runner (GPU).
+licenses/           spider-LICENSE: the Apache-2.0 license of the copied difficulty code.
 results/            COMMITTED: plots and JSON: toy curves, probe numbers, train_loss.png,
                     train/<run>/ (log, data report, adapter description), eval/<name>.json + .jsonl
                     (every prediction), eval/summary.md (the results table).
@@ -479,6 +482,28 @@ Decoding is **greedy** (always pick the most likely token), so every eval is det
 repeatable. Before the full runs, a 20-question probe checked that the base model outputs bare SQL,
 with no markdown fences or explanations, so the baseline isn't scored down for formatting.
 
+**Difficulty tiers (Session 7).** Spider labels every question **easy**, **medium**, **hard** or
+**extra** (extra-hard), so you can see *where* a model succeeds, not just how often. The label comes
+from the gold query alone, by counting its parts:
+- "component 1" clauses: WHERE, GROUP BY, ORDER BY, LIMIT, each extra joined table, OR, LIKE;
+- "component 2": nested sub-queries and INTERSECT / UNION / EXCEPT;
+- "others": several aggregates, several selected columns, several WHERE conditions, several GROUP BY
+  columns.
+
+`SELECT count(*) FROM singer` is easy. A JOIN with WHERE, GROUP BY, ORDER BY and LIMIT is extra.
+
+The function that does this counting is Spider's own `eval_hardness`, copied unchanged into
+`metrics.py`, with credit and its Apache-2.0 license in `licenses/spider-LICENSE`. It is copied
+rather than rewritten because its quirks define the official labels: a "cleaner" rewrite would
+label some questions differently and no longer match published Spider numbers.
+
+Spider's `dev.json` already stores each gold query in parsed form (the `sql` field), so the
+function runs on that directly, without Spider's SQL parser. A test checks the result against
+the official dev counts: 248 easy, 446 medium, 174 hard, 166 extra. New evals record each
+question's tier as they run. The six evals from Session 6 were run before this existed, so
+`summarize_eval.py` adds the tiers afterwards by question position, after checking that every row
+lines up with `dev.json`. Nothing had to be re-run on the GPU.
+
 The commands:
 
 ```bash
@@ -565,7 +590,39 @@ every model by 2.3–3.2 points, the base most of all (74.95 → 78.14). So the 
 *overstates* the fine-tuning gains, not understates them. `qv_r16` and `all7_r8` swap first and second
 place; the rest of the order is unchanged.
 
-### 12.4 Where the claims stand
+### 12.4 Accuracy by difficulty
+
+Each cell is accuracy on that tier, with the change against the base in parentheses.
+
+| model | easy (248) | medium (446) | hard (174) | extra (166) | all (1,034) |
+|---|---|---|---|---|---|
+| base | 90.32 | 75.34 | 70.11 | 56.02 | 74.95 |
+| `qv_r8` | 89.92 (−0.40) | 78.25 (+2.91) | 68.97 (−1.15) | 56.02 (+0.00) | 75.92 (+0.97) |
+| `qv_r4` | 89.52 (−0.81) | 78.70 (+3.36) | 69.54 (−0.57) | 54.82 (−1.20) | 75.92 (+0.97) |
+| `qv_r16` | 90.32 (+0.00) | 79.82 (+4.48) | 72.41 (+2.30) | 57.23 (+1.20) | 77.47 (+2.51) |
+| `attn_r8` | 90.73 (+0.40) | 77.58 (+2.24) | 72.41 (+2.30) | 58.43 (+2.41) | 76.79 (+1.84) |
+| `all7_r8` | 91.13 (+0.81) | 79.37 (+4.04) | 72.99 (+2.87) | 57.23 (+1.20) | 77.56 (+2.61) |
+
+**How to read it:**
+
+- **The tiers behave as labelled.** The base goes from 90% on easy down to 56% on extra.
+- **The gain sits mostly in medium.** Take questions won minus lost against the base:
+  - On medium, every fine-tune nets +10 to +20.
+  - On easy, hard and extra combined, the net is between −5 and +9.
+  - `qv_r4` and `qv_r8` gain *only* on medium; they slightly lose on easy and hard.
+  - The bigger adapters (`qv_r16`, `attn_r8`, `all7_r8`) also pick up a few hard questions.
+- **Extra-hard questions churn but don't improve.** 23–27% of them flip one way or the other in
+  every run, the most of any tier, yet the net change is only −2 to +4 questions.
+  - One plausible reading, *not yet checked against the flipped questions*: fine-tuning mostly
+    teaches Spider's conventions (§12.3), and those fixes pay off most on mid-sized queries.
+  - On long queries, a fix in one clause can be undone by a mistake in another.
+- **Easy is near the ceiling.** At 90%, there is little left to gain there.
+- **Sample sizes are small.** On extra, one question moves accuracy by 0.6 points, so per-tier
+  differences of a point or two are descriptive, not tested.
+
+The per-tier won / lost counts are in `results/eval/summary.md`.
+
+### 12.5 Where the claims stand
 
 | claim | status |
 |---|---|
@@ -576,6 +633,7 @@ place; the rest of the order is unchanged.
 | A rigorous, reproducible execution-accuracy harness | ✅ earned |
 | Improvement in execution accuracy over the base model on Spider dev | ⚠️ measured: +1 to +2.6 points, not statistically conclusive, base likely contaminated |
 | Rank and target-set ablation findings | ⚠️ measured, single seed |
+| Where the gains sit (Spider difficulty tiers) | ✅ measured: mostly medium; per-tier gaps descriptive (small n) |
 | Generalization to BIRD-dev | ⬜ not started |
 
 ---
@@ -588,8 +646,8 @@ steps, roughly in order of value:
 1. **v1 to `main` (done).** The repo has a public front page (`README.md` at the root) and an MIT
    `LICENSE`. The planning log was renamed to `docs/PROJECT_LOG.md`. `dev` was merged into `main`
    through PR #1.
-2. **Difficulty breakdown.** Vendor Spider's official `process_sql.py` + `eval_hardness()` so accuracy
-   is split into easy / medium / hard / extra. It shows *where* fine-tuning helps and hurts.
+2. **Difficulty breakdown (done, Session 7).** Spider's official `eval_hardness()` was copied in, and
+   accuracy is split into easy / medium / hard / extra (§12.4). The gain sits mostly in medium.
 3. **BIRD-dev zero-shot**, base vs best adapter. BIRD is newer and harder, so it is less likely to be
    contaminated, and it tests whether the gains generalize. Needs the download and a schema-renderer
    check.
