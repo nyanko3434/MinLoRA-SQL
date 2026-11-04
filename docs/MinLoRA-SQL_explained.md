@@ -582,12 +582,12 @@ place; the rest of the order is unchanged.
 
 ## 13. What happens next
 
-Status at the end of Session 6: all work is on `dev` and goes to `main` as v1. Candidate next steps,
-roughly in order of value:
+Status: v1 is on `main` (merged from `dev` in PR #1), and work continues on `dev`. Candidate next
+steps, roughly in order of value:
 
-1. **v1 to `main` (done at the end of Session 6).** The repo now has a public front page
-   (`README.md` at the root) and an MIT `LICENSE`. The planning log was renamed to
-   `docs/PROJECT_LOG.md`, and `dev` is merged into `main` through a pull request.
+1. **v1 to `main` (done).** The repo has a public front page (`README.md` at the root) and an MIT
+   `LICENSE`. The planning log was renamed to `docs/PROJECT_LOG.md`. `dev` was merged into `main`
+   through PR #1.
 2. **Difficulty breakdown.** Vendor Spider's official `process_sql.py` + `eval_hardness()` so accuracy
    is split into easy / medium / hard / extra. It shows *where* fine-tuning helps and hurts.
 3. **BIRD-dev zero-shot**, base vs best adapter. BIRD is newer and harder, so it is less likely to be

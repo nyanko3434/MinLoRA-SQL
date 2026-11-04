@@ -41,9 +41,9 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
     bootstrap CI + a column-order robustness check). Regenerate it rather than hand-editing.
 - **v1 packaging done:** public root `README.md`, MIT `LICENSE`, the planning log renamed to
   `docs/PROJECT_LOG.md`, and `requirements.txt` made portable (`-e .`, cu121 wheel index).
-- Next (Session 7): merge the `dev` → `main` PR if it isn't merged yet. Then the user picks
-  among difficulty breakdown, BIRD-dev, seed repeats and the write-up. When results change,
-  update the root README's tables too.
+- **v1 is merged to `main`** (PR #1, merge commit 3bbe832). Work continues on `dev`.
+- Next (Session 7): the Spider difficulty breakdown. After that the user picks among BIRD-dev,
+  seed repeats and the write-up. When results change, update the root README's tables too.
 - **Docs to keep current with every status-changing chunk:** `README.md` (public front page:
   results table, reproduce steps), `docs/PROJECT_LOG.md` (private planning log / knowledge base,
   CURRENT STATE block at the top), this file, and `docs/MinLoRA-SQL_explained.md`
