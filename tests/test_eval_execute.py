@@ -9,7 +9,8 @@ import pytest
 
 from lora_sql.data import Example
 from lora_sql.eval import execute
-from lora_sql.eval.execute import ExecutionError, execute_and_compare, order_matters, results_match, run_query
+from lora_sql.eval.execute import (ExecutionError, bird_set_match, execute_and_compare, order_matters, results_match,
+                                   run_query)
 from lora_sql.eval.runner import check_held_out, gold_preflight, load_config
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,7 +126,26 @@ def test_held_out_guard():
         check_held_out(_cfg(db_dir="data/spider_data/test_database"))
 
 
-@pytest.mark.parametrize("path", ["configs/week1_parity.yaml", "configs/eval/coder7b_spider_dev.yaml"])
+def _bird_cfg(eval_path="data/bird/dev_20240627/dev.json", db_dir="data/bird/dev_20240627/dev_databases"):
+    return {"data": {"format": "bird", "eval_path": eval_path, "db_dir": db_dir}}
+
+
+def test_held_out_guard_bird():
+    check_held_out(_bird_cfg())
+    with pytest.raises(ValueError, match="held out"):
+        check_held_out(_bird_cfg(eval_path="data/bird/test.json"))
+    # Each format runs only against its own database directory.
+    with pytest.raises(ValueError, match="dev_databases"):
+        check_held_out(_bird_cfg(db_dir="data/spider_data/database"))
+    with pytest.raises(ValueError, match="database"):
+        check_held_out({"data": {"format": "spider", "eval_path": "data/spider_data/dev.json",
+                                 "db_dir": "data/bird/dev_20240627/dev_databases"}})
+    with pytest.raises(ValueError, match="data.format"):
+        check_held_out({"data": {"format": "wikisql", "eval_path": "dev.json", "db_dir": "database"}})
+
+
+@pytest.mark.parametrize("path", ["configs/week1_parity.yaml", "configs/eval/coder7b_spider_dev.yaml",
+                                  "configs/eval/coder7b_bird_dev.yaml"])
 def test_eval_configs_pass_guard(path):
     cfg = load_config(ROOT / path)
     check_held_out(cfg)
@@ -141,3 +161,15 @@ def test_gold_preflight(tmp_path):
     broken = Example(db_id="toy", question="broken?", query="SELECT nope FROM t", schema="")
     with pytest.raises(RuntimeError, match=r"(?s)1 gold queries failed.*\[toy\] 'broken\?'"):
         gold_preflight([good, broken], db_dir)
+
+
+def test_bird_set_match_is_birds_official_rule():
+    # set(pred) == set(gold): row order and duplicates ignored, unlike results_match.
+    assert bird_set_match([(2,), (1,)], [(1,), (2,)])
+    assert bird_set_match([(1,), (1,), (2,)], [(1,), (2,)])
+    assert not results_match([(1,), (1,), (2,)], [(1,), (2,)])
+    # Columns stay positional, NULLs are fine, and floats are compared raw (no rounding).
+    assert not bird_set_match([("a", 1)], [(1, "a")])
+    assert bird_set_match([(None,)], [(None,)])
+    assert not bird_set_match([(0.1 + 0.2,)], [(0.3,)])
+    assert results_match([(0.1 + 0.2,)], [(0.3,)])

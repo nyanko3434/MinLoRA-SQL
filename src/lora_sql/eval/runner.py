@@ -20,9 +20,9 @@ from transformers import AutoTokenizer
 
 from lora_sql.checkpoint import SIDECAR_FILE, git_commit, load_lora
 from lora_sql.config import ModelConfig
-from lora_sql.data import Example, encode_prompt, load_examples
+from lora_sql.data import Example, encode_prompt, load_bird_examples, load_examples
 from lora_sql.eval.execute import DEFAULT_TIMEOUT_S, ExecutionError, execute_and_compare, order_matters, run_query
-from lora_sql.eval.metrics import EvalResult, compute_metrics, spider_difficulties
+from lora_sql.eval.metrics import EvalResult, compute_metrics, eval_difficulties
 from lora_sql.qlora import load_model
 
 
@@ -31,15 +31,36 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+# The only execution targets per eval format: Spider's database/ (never test_database/) and BIRD's
+# dev_databases/. BIRD is zero-shot only and has no public test set.
+DB_DIR_BY_FORMAT = {"spider": "database", "bird": "dev_databases"}
+
+
+def eval_format(cfg: dict) -> str:
+    fmt = cfg["data"].get("format", "spider")
+    if fmt not in DB_DIR_BY_FORMAT:
+        raise ValueError(f"data.format must be one of {sorted(DB_DIR_BY_FORMAT)}, got {fmt!r}")
+    return fmt
+
+
 def check_held_out(cfg: dict) -> None:
     """The held-out rule, enforced in code: Spider test files and test_database/ are never an
-    eval target. database/ is the only execution target."""
+    eval target. Spider runs only against database/, BIRD only against dev_databases/."""
+    fmt = eval_format(cfg)
     eval_path = Path(cfg["data"]["eval_path"])
     if eval_path.name.startswith("test"):
         raise ValueError(f"data.eval_path {eval_path} is held out; evaluate on dev only")
     db_dir = Path(cfg["data"]["db_dir"])
-    if db_dir.name != "database":
-        raise ValueError(f"data.db_dir must be Spider's database/ directory, got {db_dir} (test_database/ is held out)")
+    if db_dir.name != DB_DIR_BY_FORMAT[fmt]:
+        raise ValueError(f"data.db_dir for format {fmt!r} must be a {DB_DIR_BY_FORMAT[fmt]}/ directory, got {db_dir} "
+                         "(test_database/ is held out)")
+
+
+def load_eval_examples(cfg: dict) -> list[Example]:
+    d = cfg["data"]
+    if eval_format(cfg) == "bird":
+        return load_bird_examples(d["eval_path"], d["tables_path"], d.get("use_evidence", True))
+    return load_examples(d["eval_path"])
 
 
 def _db_path(db_dir: Path, db_id: str) -> Path:
@@ -97,16 +118,18 @@ def generate_sql(model, tokenizer, example: Example, max_new_tokens: int, device
 def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = None,
              limit: int | None = None) -> dict:
     check_held_out(cfg)
-    examples = load_examples(cfg["data"]["eval_path"])
-    # Same file, same order as load_examples, so the two lists join by index.
-    difficulties = spider_difficulties(cfg["data"]["eval_path"])
+    examples = load_eval_examples(cfg)
+    # Same file, same order as the loader, so the two lists join by index.
+    difficulties = eval_difficulties(cfg["data"]["eval_path"])
     assert len(difficulties) == len(examples), "difficulty list does not line up with the examples"
     if limit is not None:
         examples, difficulties = examples[:limit], difficulties[:limit]
     db_dir = Path(cfg["data"]["db_dir"])
 
     t0 = time.monotonic()
-    gold_rows = gold_preflight(examples, db_dir)
+    # Predictions always get DEFAULT_TIMEOUT_S. A longer gold deadline only lets a slow gold query
+    # finish; a prediction that runs as slowly still times out and scores wrong.
+    gold_rows = gold_preflight(examples, db_dir, cfg["data"].get("gold_timeout_s", DEFAULT_TIMEOUT_S))
     print(f"gold preflight: {len(examples)} gold queries executed ok", flush=True)
 
     model, tokenizer = load_model_for_eval(cfg, lora_checkpoint)
@@ -148,6 +171,7 @@ def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = No
         "lora_checkpoint": lora_checkpoint,
         "checkpoint_sidecar": sidecar,
         "eval_path": cfg["data"]["eval_path"],
+        "data": cfg["data"],  # format, db_dir, use_evidence, gold_timeout_s, ...
         "limit": limit,
         "max_new_tokens": cfg["eval"]["max_new_tokens"],
         "eval_git_commit": git_commit(),

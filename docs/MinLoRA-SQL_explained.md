@@ -36,7 +36,9 @@ standard library (HuggingFace `peft`). Then you measured improvement the objecti
 generated query against a real database and check whether it returns the right rows.** Result: five
 fine-tunes trained on the laptop, the best scoring 77.6% on Spider dev vs the untuned model's 75.0%.
 That is a real but small gain, and not statistically conclusive. The likely reason is that the base
-model already knows Spider well (§12).
+model already knows Spider well (§12). Then the honest test: on **BIRD**, a different benchmark the
+adapters never saw, the same fine-tunes score **4–5 points *worse*** than the untuned model, a
+clearly significant drop. The adapters mostly learned *Spider's habits*, not better SQL (§12.5).
 
 ---
 
@@ -273,6 +275,8 @@ the differences were tested for statistical significance rather than just eyebal
 | **6** | Run #1 `qv_r8` (2.29 h); reload check on the real 7B; `train_chain.sh` runs the other four overnight (~10 h); loss plot | All five runs finish 536/536 steps, peak memory ≤ 6.74 GB |
 | **6** | Eval harness hardened (§11); `eval_chain.sh` scores base + five runs (~2.5 h); `summarize_eval.py` writes the results table with significance tests | **85 tests pass.** Base 74.95% → best 77.56% (§12) |
 | **7** | v1 merged to `main` (PR #1). Spider's official difficulty function vendored (Apache-2.0); every dev question tagged easy / medium / hard / extra; accuracy broken down by tier, with no re-run (§11, §12.4) | **95 tests pass.** Split matches the official 248 / 446 / 174 / 166; the gain sits mostly in medium |
+| **8** | BIRD dev downloaded; harness taught BIRD (schema quirks, evidence hints, per-benchmark held-out guard); base + `qv_r16` + `all7_r8` scored zero-shot (~1 h each); `summarize_bird.py` | **106 tests pass.** Base 45.96% → adapters 41.1–41.8% (−4 to −5 pts, p < 0.001): **the Spider gain does not transfer** (§12.5) |
+| **9** | The write-up: `docs/WRITEUP.md`, a ~4,000-word mini-paper (parity → training → harness → Spider → BIRD → discussion); new figure `results/spider_vs_bird.png` from `plot_results.py` | Every table number cross-checked against the generated summaries; linked from the README |
 
 ---
 
@@ -302,15 +306,19 @@ configs/eval/       coder7b_spider_dev.yaml — the real eval (7B in 4-bit, dev,
 configs/week1_parity.yaml   a quick smoke eval on the 0.5B (results go to runs/, never reported).
 scripts/            check_env, toy_train + plot_toy (Session 4 figure), probe_memory (Session 5),
                     train_chain.sh (train several configs back to back), plot_train.py (loss plot),
-                    eval_chain.sh (score several runs back to back), summarize_eval.py (results table).
-tests/              95 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint,
-                    train, eval execution (CPU), difficulty tiers (CPU), eval runner (GPU).
+                    eval_chain.sh (score several runs back to back; --config picks Spider or BIRD),
+                    summarize_eval.py (Spider results table), summarize_bird.py (BIRD results table),
+                    plot_results.py (the Spider-vs-BIRD figure).
+tests/              106 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint,
+                    train, eval execution (CPU), difficulty tiers + statistics (CPU), eval runner (GPU).
 licenses/           spider-LICENSE: the Apache-2.0 license of the copied difficulty code.
 results/            COMMITTED: plots and JSON: toy curves, probe numbers, train_loss.png,
                     train/<run>/ (log, data report, adapter description), eval/<name>.json + .jsonl
-                    (every prediction), eval/summary.md (the results table).
+                    (every prediction), eval/summary.md (the results table), eval/bird/ (the same
+                    for BIRD), spider_vs_bird.png (the write-up's key figure).
+docs/               WRITEUP.md (the mini-paper), this explainer.
 runs/               NOT committed: adapter weights and raw logs from training.
-data/               NOT committed: Spider.
+data/               NOT committed: Spider, BIRD dev.
 ```
 
 ---
@@ -504,6 +512,21 @@ question's tier as they run. The six evals from Session 6 were run before this e
 `summarize_eval.py` adds the tiers afterwards by question position, after checking that every row
 lines up with `dev.json`. Nothing had to be re-run on the GPU.
 
+**BIRD (Session 8).** The same harness also runs BIRD dev, chosen by `format: bird` in the eval
+config. Four things had to change for it:
+- **Schemas.** BIRD writes a two-column primary key as a nested list, and uses type names like
+  `real` and `date`. The schema renderer now handles both, and Spider's output is unchanged.
+- **Evidence.** Each BIRD question comes with an expert hint, e.g. "eligible free rate = Free Meal
+  Count / Enrollment". It is appended to the question as `Hint: ...`, so the prompt template itself
+  never changes.
+- **Held-out guard.** Spider may only run against `database/`, BIRD only against
+  `dev_databases/`, and anything named `test` is still refused.
+- **Slow gold queries.** Two of BIRD's answer-key queries take 39 s and 188 s. Gold queries get up
+  to 300 s; predictions keep the 30 s limit, as in BIRD's own evaluation.
+
+BIRD's official score uses a looser comparison: it treats the result as a *set*, ignoring row order
+and duplicates. `summarize_bird.py` reports both that and this harness's strict score.
+
 The commands:
 
 ```bash
@@ -514,6 +537,10 @@ python -m lora_sql.eval.runner --config configs/eval/coder7b_spider_dev.yaml \
 systemd-inhibit --what=sleep:idle bash scripts/eval_chain.sh base qv_r8 qv_r4 qv_r16 attn_r8 all7_r8
 # the results table -> results/eval/summary.md
 python scripts/summarize_eval.py
+# BIRD dev, zero-shot (~1 h each) -> results/eval/bird/, then its table (CPU, ~6 min)
+systemd-inhibit --what=sleep:idle bash scripts/eval_chain.sh --config configs/eval/coder7b_bird_dev.yaml \
+    --out-dir results/eval/bird base qv_r16 all7_r8
+python scripts/summarize_bird.py
 ```
 
 ---
@@ -622,7 +649,52 @@ Each cell is accuracy on that tier, with the change against the base in parenthe
 
 The per-tier won / lost counts are in `results/eval/summary.md`.
 
-### 12.5 Where the claims stand
+### 12.5 Out of domain: BIRD dev, zero-shot (1,534 questions)
+
+The real test of "did fine-tuning make the model better at SQL?" is a benchmark it was **not**
+trained on. BIRD has 11 different databases with bigger, messier schemas, and harder questions.
+
+| model | accuracy (strict) | change vs base | right that base missed / wrong that base got | p-value (corrected) | BIRD's official score |
+|---|---|---|---|---|---|
+| base (no fine-tuning) | **45.96%** | | | | **50.39%** |
+| `qv_r16` | 41.13% | −4.82 | +99 / −173 | 0.00002 | 45.37% |
+| `all7_r8` | 41.79% | −4.17 | +101 / −165 | 0.0001 | 46.22% |
+
+**How to read it:**
+
+- **The fine-tunes are clearly worse here.** On Spider the gain was +2.5 points and not
+  conclusive. Here the loss is 4–5 points, and the p-values are tiny: if fine-tuning really made no
+  difference, a gap this big would turn up by luck about 1 time in 10,000 or less.
+  - The 95% confidence intervals ([−7.0, −2.7] and [−6.2, −2.0]) are entirely below zero.
+  - The drop shows on every difficulty level (largest on "challenging") and on 8–9 of the 11
+    databases.
+- **Why: the adapters learned Spider's *habits*.** The summary script counts these in every
+  prediction:
+  - Spider's answer key writes `a  =  b` with doubled spaces. That shows up in 74–77% of the
+    adapters' BIRD answers, against under 1% for the base model. Harmless in itself, but it shows
+    how strongly the Spider style was stamped in.
+  - Spider puts string values in double quotes. Over half of the adapters' answers now do too
+    (base: 0%).
+  - **Literal values copied as written.** "1995-9-4" stays `"1995-9-4"`, but the database stores
+    `1995-09-04`. On Spider, copying literals was a *gain* (§12.3); on BIRD it is a loss.
+  - **Hints copied instead of translated.** BIRD's hints are written in pseudo-SQL like
+    `YEAR(CreationDate) = 2011`, and SQLite has no `YEAR()`. The base model usually translates it
+    to SQLite's `STRFTIME`. The adapters copy it in 28% of those questions (base: 5%), and the
+    query crashes.
+  - Most lost questions (about 70%) are not crashes at all. The SQL runs and returns the wrong
+    rows: a dropped hint condition, the wrong table, fewer columns.
+- **What it means for the project.** The small Spider gain was mostly *fitting the benchmark*, not
+  getting better at SQL. For a resume project this is a stronger result than a bigger Spider
+  number: it is a measured, significant finding about what LoRA fine-tuning on one dataset does,
+  and the parity claim and the harness made it possible to trust it.
+- **Caveats.** One training seed per adapter, but a 4–5 point drop with p < 0.001 is far bigger
+  than seed noise is likely to be. Qwen2.5-Coder (2024) could also have seen BIRD (2023), so BIRD
+  is "less likely contaminated", not certainly clean.
+
+Full tables (by difficulty, by database, error types, style counts) are in
+`results/eval/bird/summary.md`.
+
+### 12.6 Where the claims stand
 
 | claim | status |
 |---|---|
@@ -634,7 +706,7 @@ The per-tier won / lost counts are in `results/eval/summary.md`.
 | Improvement in execution accuracy over the base model on Spider dev | ⚠️ measured: +1 to +2.6 points, not statistically conclusive, base likely contaminated |
 | Rank and target-set ablation findings | ⚠️ measured, single seed |
 | Where the gains sit (Spider difficulty tiers) | ✅ measured: mostly medium; per-tier gaps descriptive (small n) |
-| Generalization to BIRD-dev | ⬜ not started |
+| Generalization to BIRD-dev | ❌ measured: does **not** generalize (−4 to −5 points vs base, p < 0.001); the adapters learned Spider's conventions |
 
 ---
 
@@ -648,17 +720,21 @@ steps, roughly in order of value:
    through PR #1.
 2. **Difficulty breakdown (done, Session 7).** Spider's official `eval_hardness()` was copied in, and
    accuracy is split into easy / medium / hard / extra (§12.4). The gain sits mostly in medium.
-3. **BIRD-dev zero-shot**, base vs best adapter. BIRD is newer and harder, so it is less likely to be
-   contaminated, and it tests whether the gains generalize. Needs the download and a schema-renderer
-   check.
-4. **Seed repeats** of one config (e.g. `qv_r16` with 2 more seeds, ~2.3 h each) to measure how much
-   accuracy moves from training noise alone.
-5. **Optional:** switch the harness to column-order-invariant comparison (the official convention).
+3. **BIRD-dev zero-shot (done, Session 8).** Base vs `qv_r16` and `all7_r8`: the fine-tunes are 4–5
+   points *worse* (§12.5). This changes what comes next.
+4. **Write-up (done, Session 9).** `docs/WRITEUP.md`. It leads with parity, then the harness, the
+   small Spider gain, and the significant BIRD loss that explains it. Figure 3 there
+   (`results/spider_vs_bird.png`) shows both on one scale.
+5. **Cheap follow-up, no retraining:** score with the adapter turned down (e.g. half its scaling)
+   on both Spider and BIRD. If BIRD recovers while Spider holds, the trade-off is tunable.
+6. **Seed repeats** of one config (e.g. `qv_r16` with 2 more seeds, ~2.3 h each). They are less
+   urgent now: they would tighten the Spider ablation gaps, but the BIRD drop is far beyond seed
+   noise.
+7. **Optional:** switch the harness to column-order-invariant comparison (the official convention).
    `summarize_eval.py` already reports it as a robustness column.
-6. **Write-up** (Week 4): a mini-paper. Motivation → method (LoRA, QLoRA, parity methodology) →
-   results (accuracy table, significance, contamination caveat) → ablations → limitations. Figures:
-   toy parity curve, training loss curves, ablation accuracy plot. **Lead with parity.**
-7. **Dropped** (recommended): the "peft-fine-tuned 7B" comparison row. Parity already shows the two
+8. **Write-up polish (optional):** a PDF export, or a shorter blog-post version for a portfolio
+   site.
+9. **Dropped** (recommended): the "peft-fine-tuned 7B" comparison row. Parity already shows the two
    implementations compute the same thing, so a second 2.3 h training run adds nothing.
 
 ---

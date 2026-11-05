@@ -64,6 +64,14 @@ def results_match(predicted: list[tuple], gold: list[tuple], ordered: bool = Fal
     return Counter(pred_rows) == Counter(gold_rows)
 
 
+def bird_set_match(predicted: list[tuple], gold: list[tuple]) -> bool:
+    """BIRD's official EX rule (bird/llm/src/evaluation.py): `set(pred) == set(gold)`. It ignores
+    row order and duplicates, with raw values (no float rounding) and positional columns. It is
+    used only to report BIRD numbers comparable with published ones; the harness uses
+    results_match."""
+    return set(predicted) == set(gold)
+
+
 def execute_and_compare(
     db_path: str | Path,
     predicted_sql: str,

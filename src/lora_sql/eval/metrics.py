@@ -3,6 +3,7 @@
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
+from math import comb
 from pathlib import Path
 
 DIFFICULTIES = ("easy", "medium", "hard", "extra")
@@ -124,12 +125,19 @@ def eval_hardness(sql):
 # --------------------------------- end of vendored Spider code ---------------------------------
 
 
-def spider_difficulties(path) -> list[str]:
-    """Spider difficulty for every record of an eval JSON, in file order (the same order
-    data.load_examples returns). Records without a parsed `sql` dict (e.g. a non-Spider eval set)
-    get "unknown"."""
+def record_difficulty(record: dict) -> str:
+    """Spider: the official tier from the parsed `sql` dict. BIRD: its own `difficulty` label
+    (simple / moderate / challenging). Anything else: "unknown"."""
+    if "sql" in record:
+        return eval_hardness(record["sql"])
+    return record.get("difficulty") or "unknown"
+
+
+def eval_difficulties(path) -> list[str]:
+    """Difficulty for every record of an eval JSON, in file order (the same order the data
+    loaders return)."""
     records = json.loads(Path(path).read_text(encoding="utf-8"))
-    return [eval_hardness(r["sql"]) if "sql" in r else "unknown" for r in records]
+    return [record_difficulty(r) for r in records]
 
 
 @dataclass
@@ -182,3 +190,29 @@ def compute_metrics(results: list[EvalResult]) -> MetricsSummary:
         correct=correct,
         by_difficulty=by_difficulty,
     )
+
+
+# ---- Paired significance over the same questions (used by scripts/summarize_*.py) ----
+
+def mcnemar_p(wins: int, losses: int) -> float:
+    """Exact two-sided McNemar test on the discordant pairs (binomial, p = 0.5)."""
+    n, k = wins + losses, min(wins, losses)
+    return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2 ** n) if n else 1.0
+
+
+def holm(pvals: list[float]) -> list[float]:
+    """Holm step-down adjusted p-values, in the input order."""
+    order = sorted(range(len(pvals)), key=pvals.__getitem__)
+    adjusted, running = [0.0] * len(pvals), 0.0
+    for rank, i in enumerate(order):
+        running = max(running, min(1.0, (len(pvals) - rank) * pvals[i]))
+        adjusted[i] = running
+    return adjusted
+
+
+def bootstrap_ci(a: list[bool], b: list[bool], resamples: list[list[int]]) -> tuple[float, float]:
+    """95% paired bootstrap CI, in percentage points, of mean(a) - mean(b) over shared index resamples."""
+    n = len(a)
+    diff = [x - y for x, y in zip(a, b)]
+    stats = sorted(sum(diff[i] for i in s) / n for s in resamples)
+    return 100 * stats[int(0.025 * len(stats))], 100 * stats[int(0.975 * len(stats)) - 1]
