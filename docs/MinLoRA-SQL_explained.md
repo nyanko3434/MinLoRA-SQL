@@ -276,6 +276,7 @@ the differences were tested for statistical significance rather than just eyebal
 | **6** | Eval harness hardened (§11); `eval_chain.sh` scores base + five runs (~2.5 h); `summarize_eval.py` writes the results table with significance tests | **85 tests pass.** Base 74.95% → best 77.56% (§12) |
 | **7** | v1 merged to `main` (PR #1). Spider's official difficulty function vendored (Apache-2.0); every dev question tagged easy / medium / hard / extra; accuracy broken down by tier, with no re-run (§11, §12.4) | **95 tests pass.** Split matches the official 248 / 446 / 174 / 166; the gain sits mostly in medium |
 | **8** | BIRD dev downloaded; harness taught BIRD (schema quirks, evidence hints, per-benchmark held-out guard); base + `qv_r16` + `all7_r8` scored zero-shot (~1 h each); `summarize_bird.py` | **106 tests pass.** Base 45.96% → adapters 41.1–41.8% (−4 to −5 pts, p < 0.001): **the Spider gain does not transfer** (§12.5) |
+| **9** | The write-up: `docs/WRITEUP.md`, a ~4,000-word mini-paper (parity → training → harness → Spider → BIRD → discussion); new figure `results/spider_vs_bird.png` from `plot_results.py` | Every table number cross-checked against the generated summaries; linked from the README |
 
 ---
 
@@ -306,15 +307,18 @@ configs/week1_parity.yaml   a quick smoke eval on the 0.5B (results go to runs/,
 scripts/            check_env, toy_train + plot_toy (Session 4 figure), probe_memory (Session 5),
                     train_chain.sh (train several configs back to back), plot_train.py (loss plot),
                     eval_chain.sh (score several runs back to back; --config picks Spider or BIRD),
-                    summarize_eval.py (Spider results table), summarize_bird.py (BIRD results table).
+                    summarize_eval.py (Spider results table), summarize_bird.py (BIRD results table),
+                    plot_results.py (the Spider-vs-BIRD figure).
 tests/              106 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint,
                     train, eval execution (CPU), difficulty tiers + statistics (CPU), eval runner (GPU).
 licenses/           spider-LICENSE: the Apache-2.0 license of the copied difficulty code.
 results/            COMMITTED: plots and JSON: toy curves, probe numbers, train_loss.png,
                     train/<run>/ (log, data report, adapter description), eval/<name>.json + .jsonl
-                    (every prediction), eval/summary.md (the results table).
+                    (every prediction), eval/summary.md (the results table), eval/bird/ (the same
+                    for BIRD), spider_vs_bird.png (the write-up's key figure).
+docs/               WRITEUP.md (the mini-paper), this explainer.
 runs/               NOT committed: adapter weights and raw logs from training.
-data/               NOT committed: Spider.
+data/               NOT committed: Spider, BIRD dev.
 ```
 
 ---
@@ -718,8 +722,9 @@ steps, roughly in order of value:
    accuracy is split into easy / medium / hard / extra (§12.4). The gain sits mostly in medium.
 3. **BIRD-dev zero-shot (done, Session 8).** Base vs `qv_r16` and `all7_r8`: the fine-tunes are 4–5
    points *worse* (§12.5). This changes what comes next.
-4. **Write-up (recommended next).** The story is now complete: parity, harness, a small Spider gain,
-   and a significant out-of-domain loss that explains it.
+4. **Write-up (done, Session 9).** `docs/WRITEUP.md`. It leads with parity, then the harness, the
+   small Spider gain, and the significant BIRD loss that explains it. Figure 3 there
+   (`results/spider_vs_bird.png`) shows both on one scale.
 5. **Cheap follow-up, no retraining:** score with the adapter turned down (e.g. half its scaling)
    on both Spider and BIRD. If BIRD recovers while Spider holds, the trade-off is tunable.
 6. **Seed repeats** of one config (e.g. `qv_r16` with 2 more seeds, ~2.3 h each). They are less
@@ -727,9 +732,8 @@ steps, roughly in order of value:
    noise.
 7. **Optional:** switch the harness to column-order-invariant comparison (the official convention).
    `summarize_eval.py` already reports it as a robustness column.
-8. **Write-up details** (Week 4): a mini-paper. Motivation → method (LoRA, QLoRA, parity methodology) →
-   results (accuracy table, significance, contamination caveat) → ablations → limitations. Figures:
-   toy parity curve, training loss curves, ablation accuracy plot. **Lead with parity.**
+8. **Write-up polish (optional):** a PDF export, or a shorter blog-post version for a portfolio
+   site.
 9. **Dropped** (recommended): the "peft-fine-tuned 7B" comparison row. Parity already shows the two
    implementations compute the same thing, so a second 2.3 h training run adds nothing.
 

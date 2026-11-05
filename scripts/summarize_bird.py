@@ -38,6 +38,7 @@ SPIDER_SPACING = re.compile(r"\S {2}(?:=|>=|<=|!=|<|>) {2}\S| ,  ")  # Spider go
 DQ_LITERAL = re.compile(r"(?:=|!=|<>|\bLIKE)\s*\"", re.I)            # string literal in double quotes
 YEAR_FN = re.compile(r"\bYEAR\s*\(", re.I)                          # MySQL-style; SQLite has no YEAR()
 CAST = re.compile(r"\bCAST\s*\(", re.I)
+STRFTIME = re.compile(r"\bSTRFTIME\s*\(", re.I)                    # SQLite's way to take a year
 JOIN = re.compile(r"\bJOIN\b", re.I)
 
 
@@ -201,9 +202,10 @@ def main():
                       ("uses `YEAR(...)` (no such function in SQLite) %", YEAR_FN),
                       ("uses `CAST(...)` %", CAST)]:
         lines.append(f"| {label} | {share(rx, golds):.1f} | " + " | ".join(f"{share(rx, preds[n]):.1f}" for n in NAMES) + " |")
-    lines.append(f"| uses `YEAR(...)` when the hint itself writes `YEAR(` (n={len(year_hint)}) % | "
-                 f"{share(YEAR_FN, golds, year_hint):.1f} | "
-                 + " | ".join(f"{share(YEAR_FN, preds[n], year_hint):.1f}" for n in NAMES) + " |")
+    for label, rx in [("uses `YEAR(...)`", YEAR_FN), ("uses SQLite's `STRFTIME(...)`", STRFTIME)]:
+        lines.append(f"| {label} when the hint itself writes `YEAR(` (n={len(year_hint)}) % | "
+                     f"{share(rx, golds, year_hint):.1f} | "
+                     + " | ".join(f"{share(rx, preds[n], year_hint):.1f}" for n in NAMES) + " |")
     mean_joins = lambda sqls: sum(len(JOIN.findall(s)) for s in sqls) / len(sqls)
     lines.append(f"| mean JOINs per query | {mean_joins(golds):.2f} | "
                  + " | ".join(f"{mean_joins(preds[n]):.2f}" for n in NAMES) + " |")
@@ -250,9 +252,10 @@ def main():
         f"to {fmt_range([share(DQ_LITERAL, preds[n]) for n in RUNS], '{:.0f}')}%. The spacing is harmless by itself, "
         "but it shows how strongly 536 steps of Spider imprinted the output.",
         f"- **Hints are copied literally instead of translated.** BIRD's evidence often writes pseudo-SQL such as "
-        f"`YEAR(CreationDate) = 2011`. On the {len(year_hint)} questions whose hint contains `YEAR(`, base writes "
-        f"`YEAR(` in {share(YEAR_FN, preds['base'], year_hint):.0f}% of predictions (it usually translates to "
-        f"SQLite's `STRFTIME`); the adapters do so in "
+        f"`YEAR(CreationDate) = 2011`. On the {len(year_hint)} questions whose hint contains `YEAR(`, base "
+        f"translates it to SQLite's `STRFTIME` in {share(STRFTIME, preds['base'], year_hint):.0f}% of predictions "
+        f"and copies `YEAR(` in {share(YEAR_FN, preds['base'], year_hint):.0f}%; the adapters translate in "
+        f"{fmt_range([share(STRFTIME, preds[n], year_hint) for n in RUNS], '{:.0f}')}% and copy in "
         f"{fmt_range([share(YEAR_FN, preds[n], year_hint) for n in RUNS], '{:.0f}')}%, which fails with "
         "`no such function: YEAR`.",
         f"- **Not the cause:** `CAST` usage ({', '.join(f'{share(CAST, preds[n]):.0f}%' for n in NAMES)}) and "

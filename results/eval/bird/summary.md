@@ -47,6 +47,7 @@ Counted over all predictions. The gold column is the BIRD reference SQL.
 | uses `YEAR(...)` (no such function in SQLite) % | 0.0 | 0.3 | 1.6 | 1.6 |
 | uses `CAST(...)` % | 9.9 | 7.5 | 7.6 | 7.0 |
 | uses `YEAR(...)` when the hint itself writes `YEAR(` (n=78) % | 0.0 | 5.1 | 28.2 | 28.2 |
+| uses SQLite's `STRFTIME(...)` when the hint itself writes `YEAR(` (n=78) % | 87.2 | 85.9 | 50.0 | 44.9 |
 | mean JOINs per query | 0.93 | 0.80 | 0.88 | 0.83 |
 
 Prediction execution errors by kind:
@@ -66,7 +67,7 @@ Prediction execution errors by kind:
 - **It is broad, not one bad database.** qv_r16 drops on 9, all7_r8 drops on 8 of 11 databases; both adapters rise only on student_club, thrombosis_prediction. Every difficulty level drops; the largest drop is on challenging.
 - **Mostly silent wrong answers, not crashes.** Of the questions lost against base, 71% (qv_r16), 68% (all7_r8) still execute and return a wrong result. Overall execution errors rise only slightly (189 → 208, 211).
 - **The Spider style carries over.** Spider's gold-query spacing appears in 74%, 77% of the adapters' predictions, against 1% for base and 0% of BIRD's gold. Double-quoted string literals (Spider's habit) rise from 0% to 51–54%. The spacing is harmless by itself, but it shows how strongly 536 steps of Spider imprinted the output.
-- **Hints are copied literally instead of translated.** BIRD's evidence often writes pseudo-SQL such as `YEAR(CreationDate) = 2011`. On the 78 questions whose hint contains `YEAR(`, base writes `YEAR(` in 5% of predictions (it usually translates to SQLite's `STRFTIME`); the adapters do so in 28%, which fails with `no such function: YEAR`.
+- **Hints are copied literally instead of translated.** BIRD's evidence often writes pseudo-SQL such as `YEAR(CreationDate) = 2011`. On the 78 questions whose hint contains `YEAR(`, base translates it to SQLite's `STRFTIME` in 86% of predictions and copies `YEAR(` in 5%; the adapters translate in 45–50% and copy in 28%, which fails with `no such function: YEAR`.
 - **Not the cause:** `CAST` usage (7%, 8%, 7%) and `no such column` errors (171, 165, 173) barely move.
 - **From reading a random sample of 15 lost questions per adapter:**
   - Literal values are copied as the question writes them: `"1995-9-4"` for a stored `1995-09-04`, `"No.667467"`, `"female"` for `'Female'`. This was a *gain* on Spider, whose gold copies literals.
