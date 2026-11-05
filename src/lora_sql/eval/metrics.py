@@ -3,6 +3,7 @@
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
+from math import comb
 from pathlib import Path
 
 DIFFICULTIES = ("easy", "medium", "hard", "extra")
@@ -189,3 +190,29 @@ def compute_metrics(results: list[EvalResult]) -> MetricsSummary:
         correct=correct,
         by_difficulty=by_difficulty,
     )
+
+
+# ---- Paired significance over the same questions (used by scripts/summarize_*.py) ----
+
+def mcnemar_p(wins: int, losses: int) -> float:
+    """Exact two-sided McNemar test on the discordant pairs (binomial, p = 0.5)."""
+    n, k = wins + losses, min(wins, losses)
+    return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2 ** n) if n else 1.0
+
+
+def holm(pvals: list[float]) -> list[float]:
+    """Holm step-down adjusted p-values, in the input order."""
+    order = sorted(range(len(pvals)), key=pvals.__getitem__)
+    adjusted, running = [0.0] * len(pvals), 0.0
+    for rank, i in enumerate(order):
+        running = max(running, min(1.0, (len(pvals) - rank) * pvals[i]))
+        adjusted[i] = running
+    return adjusted
+
+
+def bootstrap_ci(a: list[bool], b: list[bool], resamples: list[list[int]]) -> tuple[float, float]:
+    """95% paired bootstrap CI, in percentage points, of mean(a) - mean(b) over shared index resamples."""
+    n = len(a)
+    diff = [x - y for x, y in zip(a, b)]
+    stats = sorted(sum(diff[i] for i in s) / n for s in resamples)
+    return 100 * stats[int(0.025 * len(stats))], 100 * stats[int(0.975 * len(stats)) - 1]

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from lora_sql.eval import runner
-from lora_sql.eval.metrics import DIFFICULTIES, eval_difficulties, record_difficulty
+from lora_sql.eval.metrics import DIFFICULTIES, bootstrap_ci, eval_difficulties, holm, mcnemar_p, record_difficulty
 
 ROOT = Path(__file__).resolve().parents[1]
 DEV = ROOT / "data" / "spider_data" / "dev.json"
@@ -95,3 +95,29 @@ def test_run_eval_bird_format(tmp_path, monkeypatch):
     assert [r["difficulty"] for r in report["results"]] == [r["difficulty"] for r in records]
     assert summary["overall_accuracy"] == 1.0
     assert report["meta"]["data"]["format"] == "bird"
+
+
+def test_mcnemar_exact_values():
+    assert mcnemar_p(0, 10) == pytest.approx(2 / 1024)
+    assert mcnemar_p(5, 5) == 1.0
+    assert mcnemar_p(0, 0) == 1.0
+    assert mcnemar_p(3, 9) == mcnemar_p(9, 3)  # two-sided: symmetric
+
+
+def test_holm_adjusts_in_input_order_and_is_monotone():
+    raw = [0.04, 0.01, 0.03]
+    adj = holm(raw)
+    assert adj == pytest.approx([0.06, 0.03, 0.06])  # 0.01*3, max(0.03*2, 0.03), max(0.04*1, 0.06)
+    order = sorted(range(3), key=raw.__getitem__)
+    assert [adj[i] for i in order] == sorted(adj)
+    assert all(a >= r for a, r in zip(adj, raw))
+
+
+def test_bootstrap_ci_brackets_observed_difference():
+    import random
+    rng = random.Random(0)
+    a = [i % 4 != 0 for i in range(400)]   # 75% right
+    b = [i % 2 == 0 for i in range(400)]   # 50% right
+    resamples = [[rng.randrange(400) for _ in range(400)] for _ in range(1000)]
+    lo, hi = bootstrap_ci(a, b, resamples)
+    assert lo < 25.0 < hi and lo > 0

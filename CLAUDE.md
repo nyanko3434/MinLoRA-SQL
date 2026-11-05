@@ -8,7 +8,7 @@ A from-scratch LoRA implementation validated numerically against HuggingFace `pe
 text-to-SQL fine-tuning on Spider with an execution-based eval harness. The package is `lora_sql`,
 laid out as a `src/` package and installed editable into `.venv`.
 
-**Status: Session 7 COMPLETE (Spider difficulty breakdown; all five configs trained and scored on Spider dev in Session 6).** The core LoRA implementation and its verification are done and
+**Status: Session 8 COMPLETE (BIRD dev zero-shot: the Spider adapters score 4–5 pts BELOW base; Session 7 Spider difficulty breakdown; Session 6 trained and scored all five configs on Spider dev).** The core LoRA implementation and its verification are done and
 committed — `src/lora_sql/lora.py` (`LoRALinear`, `inject_lora`, `lora_param_stats`),
 `tests/test_lora_injection.py` (10 passing), and `tests/test_lora_parity.py` (8 passing:
 forward + backward numerical parity vs `peft`, fp32, atol=1e-6). Session 4 added `src/lora_sql/data.py`
@@ -42,14 +42,23 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
 - **v1 packaging done:** public root `README.md`, MIT `LICENSE`, the planning log renamed to
   `docs/PROJECT_LOG.md`, and `requirements.txt` made portable (`-e .`, cu121 wheel index).
 - **v1 is merged to `main`** (PR #1, merge commit 3bbe832). Work continues on `dev`.
-- **Session 8 (in progress): BIRD-dev zero-shot**, with evidence in the prompt, scoring base +
-  qv_r16 + all7_r8.
-  - Harness support is done (BIRD loader, guard, config, chain flags), and a 20-question smoke
-    test on the base passed.
-  - Next: the 3-model eval chain (~3.5–4 h on the GPU), then `scripts/summarize_bird.py` and the
-    docs.
-  - Later: seed repeats and the write-up. When results change, update the root README's tables
-    too.
+- **Session 8: BIRD-dev zero-shot done** (evidence in the prompt; base + qv_r16 + all7_r8, about 1 h
+  each).
+  - Strict EX: base 45.96, qv_r16 41.13 (−4.82), all7_r8 41.79 (−4.17). Holm p = 1.7e-5 / 1.0e-4,
+    and both CIs lie below zero.
+  - Official BIRD set-compare: 50.39 / 45.37 / 46.22.
+  - The drop is broad: every difficulty level, and 8–9 of 11 DBs.
+  - Mechanism, counted by `scripts/summarize_bird.py`: Spider style transfers.
+    - Double-space formatting is in 74–77% of adapter predictions vs <1% for base.
+    - Double-quoted literals: 51–54% vs 0%.
+    - Literals are copied as written.
+    - Hint pseudo-SQL `YEAR()` is copied: 28% vs 5% where the hint writes it.
+    - About 70% of lost answers are silent wrong results.
+  - Takeaway: the Spider gain is mostly benchmark conventions. `results/eval/bird/summary.md` is
+    generated; regenerate it rather than hand-editing.
+- Next (Session 9, the user's pick): the write-up (recommended). Other options: a cheap
+  adapter-scaling probe (e.g. α/2 on both Spider and BIRD, no retraining), then seed repeats (less
+  urgent now). When results change, update the root README's tables too.
 - **Docs to keep current with every status-changing chunk:** `README.md` (public front page:
   results table, reproduce steps), `docs/PROJECT_LOG.md` (private planning log / knowledge base,
   CURRENT STATE block at the top), this file, and `docs/MinLoRA-SQL_explained.md`
@@ -61,8 +70,8 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
     "Accuracy by difficulty" section into summary.md.
   - Result: the gain sits mostly in medium (net +10 to +20 questions per run). Extra churns
     23–27% with near-zero net change. Easy is near ceiling (base 90.3%).
-**`pytest -v` -> 102 passing** (10 injection + 8 parity + 11 data + 10 4-bit + 14 config + 4 qlora
-+ 6 checkpoint + 6 train + 18 eval_execute (CPU) + 12 eval_metrics (CPU) + 3 eval_runner (GPU)).
+**`pytest -v` -> 106 passing** (10 injection + 8 parity + 11 data + 10 4-bit + 14 config + 4 qlora
++ 6 checkpoint + 6 train + 19 eval_execute (CPU) + 15 eval_metrics (CPU) + 3 eval_runner (GPU)).
 Two of the BIRD tests are skipped if `data/bird/dev_20240627/` is missing.
 
 **Eval configs** (plain YAML dicts read by `eval/runner.py`). Keys: `model.{name_or_path, quant,
@@ -91,7 +100,7 @@ qv_r16, attn_r8, all7_r8), `configs/week1_parity.yaml`, `configs/eval/coder7b_sp
 `configs/eval/coder7b_bird_dev.yaml`, all
 test files, `pyproject.toml`, and the `scripts/` files (`check_env.py`, `check_spider_database.py`,
 `toy_train.py`, `plot_toy.py`, `probe_memory.py`, `train_chain.sh`, `plot_train.py`,
-`eval_chain.sh`, `summarize_eval.py`), and `licenses/spider-LICENSE` (Apache-2.0, for the vendored
+`eval_chain.sh`, `summarize_eval.py`, `summarize_bird.py`), and `licenses/spider-LICENSE` (Apache-2.0, for the vendored
 Spider code in `metrics.py`).
 
 ## checkpoint.py / train.py (implemented Session 5 Half 2)
@@ -193,12 +202,16 @@ systemd-inhibit --what=sleep:idle bash scripts/eval_chain.sh --config configs/ev
     --out-dir results/eval/bird base qv_r16 all7_r8
 # Results table + paired significance + column-order check -> results/eval/summary.md (CPU)
 python scripts/summarize_eval.py
+# BIRD table: strict + official set-compare EX, by difficulty / DB, style diagnostics
+# -> results/eval/bird/summary.md (CPU, ~6 min: it re-executes every gold and prediction, and
+# asserts strict == the stored flags)
+python scripts/summarize_bird.py
 
 # Memory/throughput probe for a train config -> results/probe_<run_name>.json
 HF_HUB_OFFLINE=1 python scripts/probe_memory.py --config configs/train/qv_r8.yaml --seq-lens 512 1024 1536 2048 2560
 
 # Tests: pytest is in requirements.txt and configured in pyproject.toml
-# (testpaths = ["tests"]). 102 passing as of Session 8 (incl. 18 eval_execute + 12 eval_metrics CPU,
+# (testpaths = ["tests"]). 106 passing as of Session 8 (incl. 19 eval_execute + 15 eval_metrics CPU,
 # 3 eval_runner GPU).
 pytest -v
 # CPU-only subset: safe while training holds the GPU
@@ -224,7 +237,9 @@ every `configs/train/*.yaml` (all7_r8 OOMs at 2560; 2048 drops only 82 `baseball
 Training evidence is also committed: `results/train_loss.png` and `results/train/<run>/`
 (`log.jsonl`, `data_report.json`, `lora_config.json`). Adapter weights stay in `runs/`.
 Eval results are committed as `results/eval/<name>.json` + `.jsonl` (base and the five runs), plus
-the generated `results/eval/summary.md`.
+the generated `results/eval/summary.md`. BIRD results are in `results/eval/bird/{base,qv_r16,all7_r8}`
+`.json/.jsonl` (stamped `5d959f0+dirty`; the only dirt was the untracked output dir being written)
+plus the generated `results/eval/bird/summary.md`.
 Re-running `probe_memory.py` overwrites `results/probe_<run_name>.json`.
 
 `data/bird/dev_20240627/` (also gitignored, from https://bird-bench.oss-cn-beijing.aliyuncs.com/dev.zip,
@@ -256,6 +271,9 @@ separation of concerns — keep new eval code in the matching module rather than
     the test-suite convention). Columns are compared positionally, with no permutation search, so
     it is slightly stricter than the official test-suite eval.
   - `execute_and_compare(db, pred_sql, gold_rows, ordered) -> (correct, exec_error)`.
+  - `bird_set_match(pred, gold)` is BIRD's official rule, `set(pred) == set(gold)` (no rounding,
+    duplicates and order ignored). It is for reporting only; the harness scores with
+    `results_match`.
 - `metrics.py` — aggregation over `EvalResult` dataclasses into a `MetricsSummary`, with an
   overall accuracy plus a breakdown by `difficulty`. It also holds the Spider difficulty code:
   - `eval_hardness(sql)` + helpers, vendored verbatim from taoyds/spider `evaluation.py` (pinned
@@ -269,6 +287,8 @@ separation of concerns — keep new eval code in the matching module rather than
   - Dev splits 248 / 446 / 174 / 166, and a CPU test enforces it.
   - `runner.run_eval` joins the tiers onto the examples by index and passes `difficulty=` into
     `EvalResult`.
+  - Paired statistics shared by both summary scripts: `mcnemar_p` (exact two-sided), `holm`, and
+    `bootstrap_ci` (95%, percentage points, over shared index resamples).
 
 ## Eval-harness hardening
 

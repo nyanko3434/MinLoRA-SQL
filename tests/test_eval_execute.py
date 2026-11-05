@@ -9,7 +9,8 @@ import pytest
 
 from lora_sql.data import Example
 from lora_sql.eval import execute
-from lora_sql.eval.execute import ExecutionError, execute_and_compare, order_matters, results_match, run_query
+from lora_sql.eval.execute import (ExecutionError, bird_set_match, execute_and_compare, order_matters, results_match,
+                                   run_query)
 from lora_sql.eval.runner import check_held_out, gold_preflight, load_config
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -160,3 +161,15 @@ def test_gold_preflight(tmp_path):
     broken = Example(db_id="toy", question="broken?", query="SELECT nope FROM t", schema="")
     with pytest.raises(RuntimeError, match=r"(?s)1 gold queries failed.*\[toy\] 'broken\?'"):
         gold_preflight([good, broken], db_dir)
+
+
+def test_bird_set_match_is_birds_official_rule():
+    # set(pred) == set(gold): row order and duplicates ignored, unlike results_match.
+    assert bird_set_match([(2,), (1,)], [(1,), (2,)])
+    assert bird_set_match([(1,), (1,), (2,)], [(1,), (2,)])
+    assert not results_match([(1,), (1,), (2,)], [(1,), (2,)])
+    # Columns stay positional, NULLs are fine, and floats are compared raw (no rounding).
+    assert not bird_set_match([("a", 1)], [(1, "a")])
+    assert bird_set_match([(None,)], [(None,)])
+    assert not bird_set_match([(0.1 + 0.2,)], [(0.3,)])
+    assert results_match([(0.1 + 0.2,)], [(0.3,)])

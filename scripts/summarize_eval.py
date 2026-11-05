@@ -19,11 +19,10 @@ and gold SQL. The committed result files are never rewritten.
 import itertools
 import json
 import random
-from math import comb
 from pathlib import Path
 
 from lora_sql.eval.execute import ExecutionError, order_matters, results_match, run_query
-from lora_sql.eval.metrics import DIFFICULTIES, eval_difficulties
+from lora_sql.eval.metrics import DIFFICULTIES, bootstrap_ci, eval_difficulties, holm, mcnemar_p
 
 RUNS = ["qv_r8", "qv_r4", "qv_r16", "attn_r8", "all7_r8"]
 NAMES = ["base", *RUNS]
@@ -39,27 +38,6 @@ def load_eval(name):
     rows = [json.loads(l) for l in Path(f"results/eval/{name}.jsonl").read_text().splitlines()]
     assert len(rows) == len(report["results"]) == report["summary"]["total"]
     return report, rows
-
-
-def mcnemar_p(wins, losses):
-    n, k = wins + losses, min(wins, losses)
-    return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2 ** n) if n else 1.0
-
-
-def holm(pvals):
-    order = sorted(range(len(pvals)), key=pvals.__getitem__)
-    adjusted, running = [0.0] * len(pvals), 0.0
-    for rank, i in enumerate(order):
-        running = max(running, min(1.0, (len(pvals) - rank) * pvals[i]))
-        adjusted[i] = running
-    return adjusted
-
-
-def bootstrap_ci(a, b, resamples):
-    n = len(a)
-    diff = [x - y for x, y in zip(a, b)]
-    stats = sorted(sum(diff[i] for i in s) / n for s in resamples)
-    return 100 * stats[int(0.025 * len(stats))], 100 * stats[int(0.975 * len(stats)) - 1]
 
 
 def db_path(db_id):
