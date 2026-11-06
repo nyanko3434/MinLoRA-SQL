@@ -712,7 +712,7 @@ Full tables (by difficulty, by database, error types, style counts) are in
 
 ## 13. What happens next
 
-Status: v1 is on `main` (merged from `dev` in PR #1), and work continues on `dev`. Candidate next
+Status: everything through Session 9 is on `main` (PRs #1–#3), and work continues on `dev`. Candidate next
 steps, roughly in order of value:
 
 1. **v1 to `main` (done).** The repo has a public front page (`README.md` at the root) and an MIT

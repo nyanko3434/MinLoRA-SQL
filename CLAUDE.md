@@ -8,7 +8,7 @@ A from-scratch LoRA implementation validated numerically against HuggingFace `pe
 text-to-SQL fine-tuning on Spider with an execution-based eval harness. The package is `lora_sql`,
 laid out as a `src/` package and installed editable into `.venv`.
 
-**Status: Session 9 COMPLETE (the write-up, `docs/WRITEUP.md`). Session 8: BIRD dev zero-shot, where the Spider adapters score 4–5 pts BELOW base; Session 7 Spider difficulty breakdown; Session 6 trained and scored all five configs on Spider dev).** The core LoRA implementation and its verification are done and
+**Status: Session 9 COMPLETE (the write-up, `docs/WRITEUP.md`). Session 8: BIRD dev zero-shot, where the Spider adapters score 4–5 pts BELOW base; Session 7 Spider difficulty breakdown; Session 6 trained and scored all five configs on Spider dev.** The core LoRA implementation and its verification are done and
 committed — `src/lora_sql/lora.py` (`LoRALinear`, `inject_lora`, `lora_param_stats`),
 `tests/test_lora_injection.py` (10 passing), and `tests/test_lora_parity.py` (8 passing:
 forward + backward numerical parity vs `peft`, fp32, atol=1e-6). Session 4 added `src/lora_sql/data.py`
@@ -41,7 +41,8 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
     bootstrap CI + a column-order robustness check). Regenerate it rather than hand-editing.
 - **v1 packaging done:** public root `README.md`, MIT `LICENSE`, the planning log renamed to
   `docs/PROJECT_LOG.md`, and `requirements.txt` made portable (`-e .`, cu121 wheel index).
-- **v1 is merged to `main`** (PR #1, merge commit 3bbe832). Work continues on `dev`.
+- **Everything through Session 9 is merged to `main`** (PR #1 v1, PR #2 Session 7, PR #3 Sessions
+  8–9, merge commit bfd7356). Work continues on `dev`.
 - **Session 8: BIRD-dev zero-shot done** (evidence in the prompt; base + qv_r16 + all7_r8, about 1 h
   each).
   - Strict EX: base 45.96, qv_r16 41.13 (−4.82), all7_r8 41.79 (−4.17). Holm p = 1.7e-5 / 1.0e-4,
@@ -65,8 +66,7 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
     regenerate it rather than hand-editing. It uses the same bootstrap seed and resamples as the
     summary scripts, so its CIs equal the tables.
 - Next (Session 10, the user's pick): the adapter-scaling probe (α/2 on Spider + BIRD, no
-  retraining), seed repeats, write-up polish (PDF / blog version), or the Sessions 8–9 dev → main
-  PR.
+  retraining), seed repeats, or write-up polish (PDF / blog version).
 - **Docs to keep current with every status-changing chunk:** `README.md` (public front page:
   results table, reproduce steps), `docs/PROJECT_LOG.md` (private planning log / knowledge base,
   CURRENT STATE block at the top), this file, and `docs/MinLoRA-SQL_explained.md`
