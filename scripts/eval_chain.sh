@@ -3,7 +3,7 @@
 #
 #   systemd-inhibit --what=sleep:idle bash scripts/eval_chain.sh base qv_r8 qv_r4 qv_r16 attn_r8 all7_r8
 #   systemd-inhibit --what=sleep:idle bash scripts/eval_chain.sh \
-#       --config configs/eval/coder7b_bird_dev.yaml --out-dir results/eval/bird base qv_r16 all7_r8
+#       --config configs/eval/coder7b_bird_dev.yaml --out-dir results/eval/bird base qv_r8 qv_r16 all7_r8
 #
 # Defaults: Spider dev (configs/eval/coder7b_spider_dev.yaml) into results/eval/.
 # "base" evaluates Coder-7B with no adapter; any other name loads runs/<name>/final via load_lora.
