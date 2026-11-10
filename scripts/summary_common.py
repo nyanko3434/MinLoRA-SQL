@@ -85,10 +85,11 @@ def fmt_p(p: float) -> str:
 
 
 def below_zero_clause(cis: dict) -> str:
-    """Which models' intervals exclude zero, as a phrase: 'for both', 'for none', 'only for a, b'."""
+    """Which models' intervals exclude zero, as a phrase: 'for both', 'for all three', 'for none',
+    'only for a, b'."""
     out = [n for n, (lo, hi) in cis.items() if hi < 0 or lo > 0]
     if len(out) == len(cis):
-        return "for both" if len(cis) == 2 else "for every one"
+        return {2: "for both", 3: "for all three"}.get(len(cis), "for every one")
     return f"only for {', '.join(out)}" if out else "for none"
 
 
@@ -99,8 +100,11 @@ def truncated_cell(report: dict) -> str:
 
 def ablation_section(names: list[str], main: dict, legacy_dir: Path, resamples: list[list[int]]) -> list[str]:
     """Markdown lines comparing `main` ({name: (report, rows)}, scored at one decoding setting)
-    with the same models in `legacy_dir`. Empty when there is no archive to compare with."""
-    if not all((legacy_dir / f"{n}.json").exists() for n in names):
+    with the same models in `legacy_dir`. A model the archive lacks is left out and named in a
+    closing line. Empty when the archive has none of them."""
+    missing = [n for n in names if not (legacy_dir / f"{n}.json").exists()]
+    names = [n for n in names if n not in missing]
+    if not names:
         return []
     legacy = {n: load_eval(legacy_dir, n) for n in names}
     new_dec, old_dec = shared_decoding({n: main[n][0] for n in names}), shared_decoding({n: legacy[n][0] for n in names})
@@ -155,4 +159,6 @@ def ablation_section(names: list[str], main: dict, legacy_dir: Path, resamples: 
               f"predictions and moves EX by {fmt_range(deltas, '{:+.2f}')} points. "
               + (f"The change is nominally significant (unadjusted p < 0.05) for {', '.join(sig)}."
                  if sig else "No model's change is nominally significant (unadjusted p < 0.05).")]
+    if missing:
+        lines += ["", f"Not in this comparison: {', '.join(missing)}, never scored at {old_p}."]
     return lines

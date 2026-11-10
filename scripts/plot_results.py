@@ -19,7 +19,6 @@ from lora_sql.eval.metrics import bootstrap_ci
 RUN_COLORS = {"qv_r4": "#eb6834", "qv_r8": "#2a78d6", "qv_r16": "#1baf7a", "attn_r8": "#eda100", "all7_r8": "#e87ba4"}
 SURFACE, INK, INK_2, MUTED, GRID, AXIS = "#fcfcfb", "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
 ROWS = ["qv_r4", "qv_r8", "qv_r16", "attn_r8", "all7_r8"]   # top to bottom, README order
-LABELLED = {"qv_r16", "all7_r8"}                             # the two runs scored on both benchmarks
 N_BOOT = 5000
 OUT = Path("results/spider_vs_bird.png")
 
@@ -44,6 +43,7 @@ def main():
     spider, spider_base, n_spider = deltas("results/eval", ROWS)
     bird_names = [n for n in ROWS if Path(f"results/eval/bird/{n}.jsonl").exists()]
     bird, bird_base, n_bird = deltas("results/eval/bird", bird_names)
+    labelled = set(bird_names)  # the runs scored on both benchmarks get full ink and a value label
 
     lo = min(v[1] for d in (spider, bird) for v in d.values())
     hi = max(v[2] for d in (spider, bird) for v in d.values())
@@ -67,7 +67,7 @@ def main():
                 ax.text(0, y, "  not evaluated", color=MUTED, fontsize=9, va="center", ha="left", style="italic")
                 continue
             d, c_lo, c_hi = data[n]
-            strong = n in LABELLED
+            strong = n in labelled
             alpha = 1.0 if strong else 0.45
             ax.plot([c_lo, c_hi], [y, y], color=RUN_COLORS[n], linewidth=2, alpha=alpha, solid_capstyle="round", zorder=2)
             ax.plot(d, y, "o", markersize=8, color=RUN_COLORS[n], alpha=alpha,
@@ -85,7 +85,7 @@ def main():
         ax.spines["bottom"].set_color(AXIS)
     axes[0].set_yticks([ys[n] for n in ROWS], ROWS)
     for tick in axes[0].get_yticklabels():
-        tick.set_color(INK if tick.get_text() in LABELLED else INK_2)
+        tick.set_color(INK if tick.get_text() in labelled else INK_2)
 
     fig.tight_layout(w_pad=3)
     OUT.parent.mkdir(parents=True, exist_ok=True)

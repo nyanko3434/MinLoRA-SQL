@@ -25,11 +25,12 @@ import json
 import random
 import re
 from collections import Counter
+from itertools import combinations
 from pathlib import Path
 
 import yaml
 from summary_common import (DQ_LITERAL, GREEDY, JOIN, LEGACY_DIR, SPIDER_SPACING, ablation_section, decoding_label,
-                            below_zero_clause, error_kind, fmt_range, is_empty_result, share, shared_decoding,
+                            below_zero_clause, error_kind, fmt_p, fmt_range, is_empty_result, share, shared_decoding,
                             truncated_cell)
 from summary_common import load_eval as load_results
 
@@ -39,7 +40,7 @@ from lora_sql.eval.execute import (DEFAULT_TIMEOUT_S, ExecutionError, bird_set_m
 from lora_sql.eval.metrics import bootstrap_ci, cluster_bootstrap_ci, holm, mcnemar_p
 
 CONFIG = Path("configs/eval/coder7b_bird_dev.yaml")
-RUNS = ["qv_r16", "all7_r8"]
+RUNS = ["qv_r8", "qv_r16", "all7_r8"]
 NAMES = ["base", *RUNS]
 LEVELS = ["simple", "moderate", "challenging"]
 RESULTS = Path("results/eval/bird")
@@ -58,8 +59,8 @@ HAND_READ = {
         "  - Literal values are copied as the question writes them: `\"president\"` for a stored `'President'`, "
         "`\"9/9/2019\"` for `2019-09-09`, `= \"null\"` for `IS NULL`. Spider's gold "
         "copies literals this way.",
-        "  - `DISTINCT` is dropped where base keeps it, and output columns are pared down (a league name without "
-        "the requested goal total, two of six administrator columns).",
+        "  - The output is pared down: a league name without the requested goal total, two of six administrator "
+        "columns, a plain count where a percentage was asked.",
         "  - Conditions are added that the question does not ask for (`status = \"approved\"`, `color != '[]'`), "
         "or a column or table is used that the schema lacks or that is the wrong one for the question.",
         "  - `ORDER BY ... LIMIT 1` is replaced by `= (SELECT MAX(...))`, which returns every tie.",
@@ -179,13 +180,15 @@ def main():
         c_lo, c_hi = cluster_ci[n]
         lines.append(f"| {n} | {ex[n]:.2f} | {ex[n] - ex['base']:+.2f} | [{lo:+.2f}, {hi:+.2f}] | "
                      f"[{c_lo:+.2f}, {c_hi:+.2f}] | "
-                     f"{raw_p[n]:.1e} ({holm_p[n]:.1e}) | +{w} / −{l} | {n_err[n]} | {truncated_cell(evals[n][0])} | "
+                     f"{fmt_p(raw_p[n])} ({fmt_p(holm_p[n])}) | +{w} / −{l} | {n_err[n]} | {truncated_cell(evals[n][0])} | "
                      f"{ex_off[n]:.2f} |")
     lines += ["", f"\"95% CI\" resamples the {n_q} questions; \"by database\" resamples the {len(set(db_ids))} "
               f"databases whole, so questions that share a database move together. {n_empty} gold "
               f"quer{'y returns' if n_empty == 1 else 'ies return'} an empty result."]
-    w, l = won_lost("all7_r8", "qv_r16")
-    lines += ["", f"Head to head: all7_r8 vs qv_r16 won / lost +{w} / −{l}, McNemar p = {mcnemar_p(w, l):.3f}."]
+    lines += ["", "Head to head between adapters (won / lost, McNemar p, unadjusted):", ""]
+    for a, b in combinations(reversed(RUNS), 2):
+        w, l = won_lost(a, b)
+        lines.append(f"- {a} vs {b}: +{w} / −{l}, p = {fmt_p(mcnemar_p(w, l))}")
 
     by_level = {lv: [i for i in range(n_q) if dev[i]["difficulty"] == lv] for lv in LEVELS}
     level_acc = {n: {lv: pct(sum(correct[n][i] for i in by_level[lv]), len(by_level[lv])) for lv in LEVELS}
@@ -249,21 +252,35 @@ def main():
     silent = {n: sum(not evals[n][1][i]["exec_error"] for i in lost[n]) for n in RUNS}
 
     drop = [ex["base"] - ex[n] for n in RUNS]
-    sig = all(holm_p[n] < 0.05 for n in RUNS)
+    level_flat = [(n, lv, level_delta[n][lv]) for n in RUNS for lv in LEVELS if level_delta[n][lv] >= 0]
+    has_distinct = lambda n, i: bool(DISTINCT.search(preds[n][i]))
+    distinct_dropped = {n: sum(has_distinct("base", i) and not has_distinct(n, i) for i in lost[n]) for n in RUNS}
+    distinct_added = {n: sum(has_distinct(n, i) and not has_distinct("base", i) for i in lost[n]) for n in RUNS}
+    sig = [n for n in RUNS if holm_p[n] < 0.05]
+    not_sig = [n for n in RUNS if n not in sig]
     all_below = all(x > 0 for x in drop)
+    every = {2: "Both", 3: "All three"}.get(len(RUNS), f"All {len(RUNS)}")
+    if not not_sig:
+        holm_text = (f"{every} differences are significant after Holm correction "
+                     f"(adjusted p ≤ {fmt_p(max(holm_p.values()))}).")
+    elif sig:
+        holm_text = (f"After Holm correction the difference is significant for {', '.join(sig)} "
+                     f"(adjusted p ≤ {fmt_p(max(holm_p[n] for n in sig))}) and not for "
+                     f"{', '.join(f'{n} (adjusted p = {fmt_p(holm_p[n])})' for n in not_sig)}.")
+    else:
+        holm_text = (f"No difference survives Holm correction "
+                     f"(adjusted p ≥ {fmt_p(min(holm_p.values()))}).")
     lines += [
         "",
         "## Reading these numbers",
         "",
-        ("- **Headline: Spider fine-tuning hurts on BIRD.** Both adapters score below the untuned base, by "
+        (f"- **Headline: Spider fine-tuning hurts on BIRD.** {every} adapters score below the untuned base, by "
          if all_below else
-         "- **Headline: the adapters do not both score below base.** Base minus adapter is ")
+         "- **Headline: not every adapter scores below base.** Base minus adapter is ")
         + f"{fmt_range(drop)} points strict ({ex['base']:.2f} → {', '.join(f'{n} {ex[n]:.2f}' for n in RUNS)}). "
         f"They lose {fmt_range([vs_base[n][1] for n in RUNS], '{}')} questions the base got right and win "
         f"{fmt_range([vs_base[n][0] for n in RUNS], '{}')}. "
-        + ("Both differences are significant after Holm correction" if sig
-           else "Not every difference survives Holm correction")
-        + f" (adjusted p ≤ {max(holm_p.values()):.1e}). The question-level bootstrap CI excludes zero "
+        + holm_text + " The question-level bootstrap CI excludes zero "
         f"{below_zero_clause({n: ci[n] for n in RUNS})}; resampling whole databases, it does so "
         f"{below_zero_clause({n: cluster_ci[n] for n in RUNS})}."
         + " Under the official BIRD rule: "
@@ -271,10 +288,10 @@ def main():
         ("- **It is broad, not one bad database.** " if all(n_db_down[n] > len(dbs) / 2 for n in RUNS)
          else "- **By database and difficulty.** ")
         + f"{', '.join(f'{n} drops on {n_db_down[n]}' for n in RUNS)} of "
-        f"{len(dbs)} databases; the databases where both rise: {', '.join(sorted(db_up)) or 'none'}. "
-        + (f"Every difficulty level drops; the largest drop is on {worst_level}."
-           if all(level_delta[n][lv] < 0 for n in RUNS for lv in LEVELS)
-           else f"Not every difficulty level drops; the largest drop is on {worst_level}."),
+        f"{len(dbs)} databases; databases where every adapter rises: {', '.join(sorted(db_up)) or 'none'}. "
+        + ("Every difficulty level drops" if not level_flat else
+           "Every difficulty level drops except " + ", ".join(f"{lv} for {n} ({d:+.2f})" for n, lv, d in level_flat))
+        + f"; the largest drop is on {worst_level}.",
         ("- **Mostly silent wrong answers, not crashes.** " if all(2 * silent[n] > len(lost[n]) for n in RUNS)
          else "- **Lost questions: wrong results and crashes.** ")
         + "Of the questions lost against base, "
@@ -296,7 +313,9 @@ def main():
         "`no such function: YEAR`.",
         f"- **For comparison:** `CAST` usage is {', '.join(f'{share(CAST, preds[n]):.0f}%' for n in NAMES)} and "
         f"`no such column` errors number {', '.join(str(err_counts[n]['no such column']) for n in NAMES)} "
-        f"({', '.join(NAMES)}).",
+        f"({', '.join(NAMES)}). Among the questions lost against base, the adapter omits a `DISTINCT` the base "
+        f"wrote in {', '.join(f'{distinct_dropped[n]} ({n})' for n in RUNS)} and adds one the base did not write in "
+        f"{', '.join(str(distinct_added[n]) for n in RUNS)}.",
         *HAND_READ.get(decoding["repetition_penalty"], []),
         "- **Caveats.** One training seed per adapter. Qwen2.5-Coder (2024) may also have seen BIRD (2023), so the "
         "base is less likely contaminated, not certainly clean. Evidence was included (the standard BIRD setting).",

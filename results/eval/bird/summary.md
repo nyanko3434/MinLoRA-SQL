@@ -7,74 +7,80 @@ Two scores per model: **strict** is this project's harness (multiset compare, or
 | model | EX % strict | Δ vs base | 95% CI | 95% CI, by database | McNemar p (Holm) | won / lost vs base | pred exec errors | truncated | EX % official |
 |---|---|---|---|---|---|---|---|---|---|
 | base | 46.68 | | | | | | 177 | 1 | 51.37 |
-| qv_r16 | 42.89 | -3.78 | [-5.93, -1.76] | [-7.92, +0.18] | 4.8e-04 (4.8e-04) | +105 / −163 | 178 | 5 | 48.24 |
-| all7_r8 | 42.18 | -4.50 | [-6.52, -2.48] | [-7.20, -1.92] | 1.6e-05 (3.2e-05) | +91 / −160 | 189 | 1 | 47.33 |
+| qv_r8 | 43.35 | -3.32 | [-5.48, -1.24] | [-7.18, +0.57] | 0.002 (0.002) | +109 / −160 | 183 | 4 | 48.70 |
+| qv_r16 | 42.89 | -3.78 | [-5.93, -1.76] | [-7.92, +0.18] | 4.8e-04 (9.5e-04) | +105 / −163 | 178 | 5 | 48.24 |
+| all7_r8 | 42.18 | -4.50 | [-6.52, -2.48] | [-7.20, -1.92] | 1.6e-05 (4.7e-05) | +91 / −160 | 189 | 1 | 47.33 |
 
 "95% CI" resamples the 1534 questions; "by database" resamples the 11 databases whole, so questions that share a database move together. 1 gold query returns an empty result.
 
-Head to head: all7_r8 vs qv_r16 won / lost +74 / −85, McNemar p = 0.428.
+Head to head between adapters (won / lost, McNemar p, unadjusted):
+
+- all7_r8 vs qv_r16: +74 / −85, p = 0.428
+- all7_r8 vs qv_r8: +86 / −104, p = 0.217
+- qv_r16 vs qv_r8: +45 / −52, p = 0.543
 
 ## By BIRD difficulty
 
 | model | simple (n=925) | moderate (n=464) | challenging (n=145) |
 |---|---|---|---|
 | base | 55.46 | 34.48 | 29.66 |
+| qv_r8 | 51.35 (-4.11) | 34.48 (+0.00) | 20.69 (-8.97) |
 | qv_r16 | 50.92 (-4.54) | 33.62 (-0.86) | 21.38 (-8.28) |
 | all7_r8 | 50.16 (-5.30) | 32.76 (-1.72) | 21.38 (-8.28) |
 
 ## By database
 
-| database | n | base | qv_r16 | all7_r8 |
-|---|---|---|---|---|
-| california_schools | 89 | 28.1 | 28.1 (+0.0) | 23.6 (-4.5) |
-| card_games | 191 | 45.0 | 40.3 (-4.7) | 37.7 (-7.3) |
-| codebase_community | 186 | 53.8 | 53.8 (+0.0) | 50.5 (-3.2) |
-| debit_card_specializing | 64 | 42.2 | 45.3 (+3.1) | 40.6 (-1.6) |
-| european_football_2 | 129 | 51.9 | 44.2 (-7.8) | 45.7 (-6.2) |
-| financial | 106 | 40.6 | 24.5 (-16.0) | 26.4 (-14.2) |
-| formula_1 | 174 | 40.8 | 36.2 (-4.6) | 37.4 (-3.4) |
-| student_club | 158 | 59.5 | 59.5 (+0.0) | 60.1 (+0.6) |
-| superhero | 129 | 81.4 | 65.9 (-15.5) | 71.3 (-10.1) |
-| thrombosis_prediction | 163 | 30.7 | 39.3 (+8.6) | 33.7 (+3.1) |
-| toxicology | 145 | 33.1 | 26.2 (-6.9) | 27.6 (-5.5) |
+| database | n | base | qv_r8 | qv_r16 | all7_r8 |
+|---|---|---|---|---|---|
+| california_schools | 89 | 28.1 | 29.2 (+1.1) | 28.1 (+0.0) | 23.6 (-4.5) |
+| card_games | 191 | 45.0 | 39.8 (-5.2) | 40.3 (-4.7) | 37.7 (-7.3) |
+| codebase_community | 186 | 53.8 | 54.8 (+1.1) | 53.8 (+0.0) | 50.5 (-3.2) |
+| debit_card_specializing | 64 | 42.2 | 42.2 (+0.0) | 45.3 (+3.1) | 40.6 (-1.6) |
+| european_football_2 | 129 | 51.9 | 47.3 (-4.7) | 44.2 (-7.8) | 45.7 (-6.2) |
+| financial | 106 | 40.6 | 26.4 (-14.2) | 24.5 (-16.0) | 26.4 (-14.2) |
+| formula_1 | 174 | 40.8 | 33.9 (-6.9) | 36.2 (-4.6) | 37.4 (-3.4) |
+| student_club | 158 | 59.5 | 60.1 (+0.6) | 59.5 (+0.0) | 60.1 (+0.6) |
+| superhero | 129 | 81.4 | 69.0 (-12.4) | 65.9 (-15.5) | 71.3 (-10.1) |
+| thrombosis_prediction | 163 | 30.7 | 39.9 (+9.2) | 39.3 (+8.6) | 33.7 (+3.1) |
+| toxicology | 145 | 33.1 | 25.5 (-7.6) | 26.2 (-6.9) | 27.6 (-5.5) |
 
 ## What changed: style diagnostics
 
 Counted over all predictions. The gold column is the BIRD reference SQL.
 
-| measure | gold | base | qv_r16 | all7_r8 |
-|---|---|---|---|---|
-| Spider gold spacing (`a  =  b`, `x ,  y`) % | 0.0 | 0.1 | 79.2 | 81.1 |
-| string literal in double quotes % | 0.0 | 0.1 | 34.7 | 39.4 |
-| uses `YEAR(...)` (no such function in SQLite) % | 0.0 | 0.3 | 1.5 | 1.5 |
-| uses `CAST(...)` % | 9.9 | 7.2 | 7.4 | 6.8 |
-| uses `DISTINCT` % | 15.9 | 8.1 | 6.6 | 7.6 |
-| uses `YEAR(...)` when the hint itself writes `YEAR(` (n=78) % | 0.0 | 5.1 | 28.2 | 26.9 |
-| uses SQLite's `STRFTIME(...)` when the hint itself writes `YEAR(` (n=78) % | 87.2 | 71.8 | 43.6 | 30.8 |
-| mean JOINs per query | 0.93 | 0.75 | 0.86 | 0.81 |
+| measure | gold | base | qv_r8 | qv_r16 | all7_r8 |
+|---|---|---|---|---|---|
+| Spider gold spacing (`a  =  b`, `x ,  y`) % | 0.0 | 0.1 | 78.1 | 79.2 | 81.1 |
+| string literal in double quotes % | 0.0 | 0.1 | 34.6 | 34.7 | 39.4 |
+| uses `YEAR(...)` (no such function in SQLite) % | 0.0 | 0.3 | 1.2 | 1.5 | 1.5 |
+| uses `CAST(...)` % | 9.9 | 7.2 | 7.7 | 7.4 | 6.8 |
+| uses `DISTINCT` % | 15.9 | 8.1 | 6.7 | 6.6 | 7.6 |
+| uses `YEAR(...)` when the hint itself writes `YEAR(` (n=78) % | 0.0 | 5.1 | 24.4 | 28.2 | 26.9 |
+| uses SQLite's `STRFTIME(...)` when the hint itself writes `YEAR(` (n=78) % | 87.2 | 71.8 | 39.7 | 43.6 | 30.8 |
+| mean JOINs per query | 0.93 | 0.75 | 0.87 | 0.86 | 0.81 |
 
 Prediction execution errors by kind:
 
-| kind | base | qv_r16 | all7_r8 |
-|---|---|---|---|
-| no such column | 157 | 138 | 151 |
-| no such function | 4 | 22 | 20 |
-| no such table | 5 | 4 | 1 |
-| syntax | 3 | 4 | 8 |
-| timeout (30 s) | 1 | 0 | 1 |
-| other | 7 | 10 | 8 |
+| kind | base | qv_r8 | qv_r16 | all7_r8 |
+|---|---|---|---|---|
+| no such column | 157 | 140 | 138 | 151 |
+| no such function | 4 | 19 | 22 | 20 |
+| no such table | 5 | 6 | 4 | 1 |
+| syntax | 3 | 4 | 4 | 8 |
+| timeout (30 s) | 1 | 0 | 0 | 1 |
+| other | 7 | 14 | 10 | 8 |
 
 ## Reading these numbers
 
-- **Headline: Spider fine-tuning hurts on BIRD.** Both adapters score below the untuned base, by 3.78–4.50 points strict (46.68 → qv_r16 42.89, all7_r8 42.18). They lose 160–163 questions the base got right and win 91–105. Both differences are significant after Holm correction (adjusted p ≤ 4.8e-04). The question-level bootstrap CI excludes zero for both; resampling whole databases, it does so only for all7_r8. Under the official BIRD rule: base 51.37, qv_r16 48.24, all7_r8 47.33.
-- **It is broad, not one bad database.** qv_r16 drops on 6, all7_r8 drops on 9 of 11 databases; the databases where both rise: thrombosis_prediction. Every difficulty level drops; the largest drop is on challenging.
-- **Mostly silent wrong answers, not crashes.** Of the questions lost against base, 75% (qv_r16), 72% (all7_r8) still execute and return a wrong result. Execution errors overall: base 177, qv_r16 178, all7_r8 189.
-- **The Spider style carries over.** Spider's gold-query spacing appears in 79%, 81% of the adapters' predictions, against 0% for base and 0% of BIRD's gold. Double-quoted string literals (Spider's habit) rise from 0% to 35–39%. The spacing is harmless by itself, but it shows how strongly 536 steps of Spider imprinted the output.
-- **Hints are copied literally instead of translated.** BIRD's evidence often writes pseudo-SQL such as `YEAR(CreationDate) = 2011`. On the 78 questions whose hint contains `YEAR(`, base translates it to SQLite's `STRFTIME` in 72% of predictions and copies `YEAR(` in 5%; the adapters translate in 31–44% and copy in 27–28%, which fails with `no such function: YEAR`.
-- **For comparison:** `CAST` usage is 7%, 7%, 7% and `no such column` errors number 157, 138, 151 (base, qv_r16, all7_r8).
+- **Headline: Spider fine-tuning hurts on BIRD.** All three adapters score below the untuned base, by 3.32–4.50 points strict (46.68 → qv_r8 43.35, qv_r16 42.89, all7_r8 42.18). They lose 160–163 questions the base got right and win 91–109. All three differences are significant after Holm correction (adjusted p ≤ 0.002). The question-level bootstrap CI excludes zero for all three; resampling whole databases, it does so only for all7_r8. Under the official BIRD rule: base 51.37, qv_r8 48.70, qv_r16 48.24, all7_r8 47.33.
+- **It is broad, not one bad database.** qv_r8 drops on 6, qv_r16 drops on 6, all7_r8 drops on 9 of 11 databases; databases where every adapter rises: thrombosis_prediction. Every difficulty level drops except moderate for qv_r8 (+0.00); the largest drop is on challenging.
+- **Mostly silent wrong answers, not crashes.** Of the questions lost against base, 72% (qv_r8), 75% (qv_r16), 72% (all7_r8) still execute and return a wrong result. Execution errors overall: base 177, qv_r8 183, qv_r16 178, all7_r8 189.
+- **The Spider style carries over.** Spider's gold-query spacing appears in 78%, 79%, 81% of the adapters' predictions, against 0% for base and 0% of BIRD's gold. Double-quoted string literals (Spider's habit) rise from 0% to 35–39%. The spacing is harmless by itself, but it shows how strongly 536 steps of Spider imprinted the output.
+- **Hints are copied literally instead of translated.** BIRD's evidence often writes pseudo-SQL such as `YEAR(CreationDate) = 2011`. On the 78 questions whose hint contains `YEAR(`, base translates it to SQLite's `STRFTIME` in 72% of predictions and copies `YEAR(` in 5%; the adapters translate in 31–44% and copy in 24–28%, which fails with `no such function: YEAR`.
+- **For comparison:** `CAST` usage is 7%, 8%, 7%, 7% and `no such column` errors number 157, 140, 138, 151 (base, qv_r8, qv_r16, all7_r8). Among the questions lost against base, the adapter omits a `DISTINCT` the base wrote in 11 (qv_r8), 13 (qv_r16), 9 (all7_r8) and adds one the base did not write in 6, 2, 9.
 - **From reading a random sample of 15 lost questions per adapter:**
   - Literal values are copied as the question writes them: `"president"` for a stored `'President'`, `"9/9/2019"` for `2019-09-09`, `= "null"` for `IS NULL`. Spider's gold copies literals this way.
-  - `DISTINCT` is dropped where base keeps it, and output columns are pared down (a league name without the requested goal total, two of six administrator columns).
+  - The output is pared down: a league name without the requested goal total, two of six administrator columns, a plain count where a percentage was asked.
   - Conditions are added that the question does not ask for (`status = "approved"`, `color != '[]'`), or a column or table is used that the schema lacks or that is the wrong one for the question.
   - `ORDER BY ... LIMIT 1` is replaced by `= (SELECT MAX(...))`, which returns every tie.
 - **Caveats.** One training seed per adapter. Qwen2.5-Coder (2024) may also have seen BIRD (2023), so the base is less likely contaminated, not certainly clean. Evidence was included (the standard BIRD setting).
@@ -97,3 +103,5 @@ The fine-tuning effect under each setting (Δ EX vs base, points):
 | all7_r8 | -4.17 | -4.50 |
 
 Removing the penalty changes 47–66% of the predictions and moves EX by +0.39–+1.76 points. The change is nominally significant (unadjusted p < 0.05) for qv_r16.
+
+Not in this comparison: qv_r8, never scored at 1.1.
