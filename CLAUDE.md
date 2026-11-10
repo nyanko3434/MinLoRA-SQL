@@ -8,7 +8,10 @@ A from-scratch LoRA implementation validated numerically against HuggingFace `pe
 text-to-SQL fine-tuning on Spider with an execution-based eval harness. The package is `lora_sql`,
 laid out as a `src/` package and installed editable into `.venv`.
 
-**Status: Session 9 COMPLETE (the write-up, `docs/WRITEUP.md`). Session 8: BIRD dev zero-shot, where the Spider adapters score 4–5 pts BELOW base; Session 7 Spider difficulty breakdown; Session 6 trained and scored all five configs on Spider dev.** The core LoRA implementation and its verification are done and
+**Status: Session 9 COMPLETE (the write-up, `docs/WRITEUP.md`). Session 8: BIRD dev zero-shot, where the Spider adapters score 4–5 pts BELOW base; Session 7 Spider difficulty breakdown; Session 6 trained and scored all five configs on Spider dev.** **Session 10 IN PROGRESS: every eval is being re-scored with true greedy decoding.** The Session 6 / 8
+results were generated with Qwen's default `repetition_penalty` 1.1 silently applied; they are archived,
+unchanged, in `results/eval/rp1.1/` and `results/eval/bird/rp1.1/`. Until the re-score lands, the numbers
+quoted below and in README / WRITEUP are the rp1.1 ones. The core LoRA implementation and its verification are done and
 committed — `src/lora_sql/lora.py` (`LoRALinear`, `inject_lora`, `lora_param_stats`),
 `tests/test_lora_injection.py` (10 passing), and `tests/test_lora_parity.py` (8 passing:
 forward + backward numerical parity vs `peft`, fp32, atol=1e-6). Session 4 added `src/lora_sql/data.py`
