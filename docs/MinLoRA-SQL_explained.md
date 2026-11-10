@@ -41,7 +41,9 @@ model already knows Spider well (§12). Then the honest test: on **BIRD**, a dif
 adapters never saw, the three fine-tunes tested score **3 to 4.5 points *worse*** than the untuned
 model, a clearly significant drop. The adapters learned a lot of *Spider's habits*, not just better SQL
 (§12.5). Along the way a hidden default in the generation settings turned out to have skewed the
-first round of scores; finding, fixing and measuring that is its own result (§12.6).
+first round of scores; finding, fixing and measuring that is its own result (§12.6). A last
+probe turned the best adapter down to half strength without retraining: most of the Spider gain
+stayed and most of the BIRD loss went away (§12.7).
 
 ---
 
@@ -284,6 +286,7 @@ re-ran everything.
 | **9** | The write-up: `docs/WRITEUP.md`, a ~4,000-word mini-paper (parity → training → harness → Spider → BIRD → discussion); new figure `results/spider_vs_bird.png` from `plot_results.py` | Every table number cross-checked against the generated summaries; linked from the README |
 | **10** | Project review found the evals were not truly greedy: Qwen's settings file switched on a repetition penalty of 1.1. Fixed (the config must now name the value), old results archived under `rp1.1/`, **all nine evals re-run** (~5.5 h). Also: tests skip instead of failing without a GPU or the data, `pytest` pinned, by-database confidence intervals, generated diagnostics replace hand-written claims | **109 tests pass.** Spider: base 75.92% → best 79.88%, two gains now survive correction. BIRD: still −3.8 to −4.5 pts. The numbers in Sessions 6 and 8 above are the old, penalised ones (§12.6) |
 | **11** | Session 10 merged to `main` (PR #4). `qv_r8`, second on Spider after the re-score, scored on BIRD too (~1 h); `summarize_bird.py` and the figure generalised from two adapters to three; a hand-read claim about dropped `DISTINCT` replaced by a count | **109 tests pass.** BIRD: `qv_r8` 43.35% (−3.32, corrected p 0.002). All three adapters tested are below the base (−3.3 to −4.5), and they do not differ from each other (§12.5) |
+| **12** | Session 11 merged to `main` (PR #5). New eval option `--lora-scale` runs a trained adapter at a fraction of its strength (`set_lora_scale` in `lora.py`), recorded in every result. `qv_r16` scored at 0.5× and 0.25× on Spider and BIRD (~2.7 h, no retraining); new `summarize_scaling.py` and `plot_scaling.py` | **116 tests pass.** At half strength: Spider +2.71 (68% of the gain kept), BIRD −0.98 (26% of the loss). At a quarter both are within noise of the base. A diagnostic, not a tuned model (§12.7) |
 
 ---
 
@@ -292,7 +295,8 @@ re-ran everything.
 ```
 src/lora_sql/
 ├── lora.py         Your LoRA. LoRALinear (frozen base + A, B adapters), inject_lora (wraps the
-│                   chosen layers, freezes the rest), lora_param_stats (counts).
+│                   chosen layers, freezes the rest), lora_param_stats (counts), set_lora_scale
+│                   (run a trained adapter at a fraction of its strength, for the §12.7 probe).
 ├── data.py         Loads Spider examples, renders the schema as CREATE TABLE text,
 │                   encode_prompt (ChatML; the ONLY source of prompt tokens),
 │                   build_train_example (prompt + SQL + end token, and how many tokens are "the answer").
@@ -316,15 +320,17 @@ scripts/            check_env, toy_train + plot_toy (Session 4 figure), probe_me
                     eval_chain.sh (score several runs back to back; --config picks Spider or BIRD),
                     summarize_eval.py (Spider results table), summarize_bird.py (BIRD results table),
                     summary_common.py (what the two share, incl. the decoding comparison),
-                    plot_results.py (the Spider-vs-BIRD figure).
-tests/              109 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint,
+                    plot_results.py (the Spider-vs-BIRD figure), summarize_scaling.py +
+                    plot_scaling.py (the scaling probe's table and figure).
+tests/              116 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint,
                     train, eval execution (CPU), difficulty tiers + statistics (CPU), eval runner (GPU).
 licenses/           spider-LICENSE: the Apache-2.0 license of the copied difficulty code.
 results/            COMMITTED: plots and JSON: toy curves, probe numbers, train_loss.png,
                     train/<run>/ (log, data report, adapter description), eval/<name>.json + .jsonl
                     (every prediction), eval/summary.md (the results table), eval/bird/ (the same
                     for BIRD), eval/rp1.1/ and eval/bird/rp1.1/ (the first-round results, scored
-                    with the repetition penalty on), spider_vs_bird.png (the write-up's key figure).
+                    with the repetition penalty on), spider_vs_bird.png (the write-up's key figure),
+                    eval/scaling/ and eval/bird/scaling/ (the scaling probe), scaling_curve.png.
 docs/               WRITEUP.md (the mini-paper), this explainer.
 runs/               NOT committed: adapter weights and raw logs from training.
 data/               NOT committed: Spider, BIRD dev.
@@ -560,6 +566,10 @@ python scripts/summarize_eval.py
 systemd-inhibit --what=sleep:idle bash scripts/eval_chain.sh --config configs/eval/coder7b_bird_dev.yaml \
     --out-dir results/eval/bird base qv_r8 qv_r16 all7_r8
 python scripts/summarize_bird.py
+# the scaling probe: one adapter at half strength -> results/eval/scaling/qv_r16_x0.5.json
+systemd-inhibit --what=sleep:idle bash scripts/eval_chain.sh --lora-scale 0.5 \
+    --out-dir results/eval/scaling qv_r16
+python scripts/summarize_scaling.py && python scripts/plot_scaling.py
 ```
 
 ---
@@ -770,7 +780,46 @@ questions:
   model's own `generation_config.json` switches on, set every decoding parameter yourself, and
   record it with the results. Both sets of results are committed, so the claim can be checked.
 
-### 12.7 Where the claims stand
+### 12.7 Turning the adapter down (the scaling probe)
+
+**The idea.** A LoRA adapter's contribution is multiplied by `alpha / r` (§2.4). That number can be
+changed *after* training, when the model is used: multiply it by 0.5 and the adapter speaks half as
+loudly, with no retraining. Session 12 did this to `qv_r16`, the best adapter on Spider, at half
+and at a quarter of its trained strength, on both benchmarks. Scale 0 is the plain base model and
+scale 1 is the adapter as trained.
+
+| adapter scale | Spider EX | vs base | BIRD EX | vs base |
+|---|---|---|---|---|
+| 0 (base) | 75.92% | | 46.68% | |
+| 0.25 | 76.89% | +0.97 | 46.54% | −0.13 |
+| 0.5 | 78.63% | +2.71 | 45.70% | −0.98 |
+| 1 (as trained) | 79.88% | +3.97 | 42.89% | −3.78 |
+
+The picture is `results/scaling_curve.png` (Figure 4 in the write-up).
+
+**How to read it:**
+
+- **Both effects shrink, but not together.** At half strength the adapter keeps 68% of its Spider
+  gain and has only 26% of its BIRD loss. At a quarter strength neither benchmark can be told
+  apart from the base.
+- **Half against full, head to head.** Halving the adapter wins back 2.80 points on BIRD (+99 / −56
+  questions, p 6.9e-04) and gives up 1.26 on Spider (+20 / −33, p 0.098, so not clearly a loss).
+- **The habits switch on at different strengths.** On BIRD, Spider's double-space formatting is
+  already in 78.0% of answers at half strength (79.2% at full). That habit is harmless. The
+  harmful one, copying the hint's `YEAR(...)` function that SQLite does not have, is at 11.5% at
+  half strength against 28.2% at full (5.1% for the base). So the formatting shows the adapter is
+  "on", but it is not what costs the answers.
+- **Why this is not a new best model.** Both benchmarks are dev sets. Picking "0.5 is best" from
+  this table and then reporting the same table would be tuning on dev. The probe is one adapter,
+  one seed, two strengths picked beforehand. With the stricter by-database intervals, half
+  strength cannot be told apart from the base on either benchmark (Spider [−0.20, +5.77], BIRD
+  [−4.32, +2.34]).
+- **What it adds to the story.** The trade-off between "better on Spider" and "worse on BIRD" is
+  a dial, not a switch, and the BIRD damage arrives late on that dial.
+
+Full tables are in `results/eval/scaling/summary.md` (generated by `scripts/summarize_scaling.py`).
+
+### 12.8 Where the claims stand
 
 
 | claim | status |
@@ -785,12 +834,13 @@ questions:
 | Where the gains sit (Spider difficulty tiers) | ✅ measured: mostly medium; per-tier gaps descriptive (small n) |
 | Generalization to BIRD-dev | ❌ measured on three adapters: does **not** generalize (−3.3 to −4.5 points vs base, corrected p ≤ 0.002); the adapters learned Spider's conventions |
 | Decoding is what the write-up says it is | ✅ fixed and measured (Session 10): the inherited repetition penalty is off, tested, recorded per result; both rounds committed |
+| The Spider/BIRD trade-off can be dialled at inference | ⚠️ measured as a diagnostic (Session 12): at half strength `qv_r16` keeps 68% of the Spider gain with 26% of the BIRD loss; one adapter, one seed, read off dev, so not a tuned result |
 
 ---
 
 ## 13. What happens next
 
-Status: everything through Session 11 (`qv_r8` on BIRD) is on `main` (PRs #1–#5). Candidate next steps, roughly in order of value:
+Status: everything through Session 11 (`qv_r8` on BIRD) is on `main` (PRs #1–#5). Session 12 (the scaling probe) is committed on `dev`, not merged yet. Candidate next steps, roughly in order of value:
 
 1. **v1 to `main` (done).** The repo has a public front page (`README.md` at the root) and an MIT
    `LICENSE`. The planning log was renamed to `docs/PROJECT_LOG.md`. `dev` was merged into `main`
@@ -802,8 +852,9 @@ Status: everything through Session 11 (`qv_r8` on BIRD) is on `main` (PRs #1–#
 4. **Write-up (done, Session 9; revised in Session 10).** `docs/WRITEUP.md`. It leads with parity,
    then the harness, the Spider gain, the significant BIRD loss, and the decoding ablation. Figure 3 there
    (`results/spider_vs_bird.png`) shows both on one scale.
-5. **Cheap follow-up, no retraining:** score with the adapter turned down (e.g. half its scaling)
-   on both Spider and BIRD. If BIRD recovers while Spider holds, the trade-off is tunable.
+5. **Adapter turned down, no retraining (done, Session 12).** `qv_r16` at half and quarter
+   strength on both benchmarks (§12.7). On this adapter BIRD recovers faster than Spider falls. Possible
+   extensions: a 0.75× point (~1.4 h), or the same probe on `all7_r8`.
 6. **Seed repeats** of one config (e.g. `qv_r16` with 2 more seeds, ~2.3 h each). They are less
    urgent now: they would tighten the Spider ablation gaps, but the BIRD drop is far beyond seed
    noise.
@@ -838,7 +889,7 @@ Status: everything through Session 11 (`qv_r8` on BIRD) is on `main` (PRs #1–#
 | **Epoch** | One full pass over the training data. |
 | **LoRA** | Freeze the model; train small low-rank matrices A, B added to chosen layers. |
 | **Rank (r)** | Inner dimension of A and B; controls adapter size. |
-| **Alpha / scaling** | LoRA output is multiplied by alpha/r (always 2.0 here). |
+| **Alpha / scaling** | LoRA output is multiplied by alpha/r (always 2.0 in training here). The §12.7 probe multiplies it by 0.5 and 0.25 at eval time. |
 | **Adapter** | The trained A and B matrices. |
 | **Target modules** | Which layers get adapters (`q_proj`, `v_proj`, …). |
 | **QLoRA** | LoRA on a 4-bit quantized frozen base. |

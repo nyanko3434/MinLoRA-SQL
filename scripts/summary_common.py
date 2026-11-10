@@ -18,6 +18,8 @@ LEGACY_DIR = "rp1.1"
 SPIDER_SPACING = re.compile(r"\S {2}(?:=|>=|<=|!=|<|>) {2}\S| ,  ")  # Spider gold's `a  =  b`, `x ,  y`
 DQ_LITERAL = re.compile(r"(?:=|!=|<>|\bLIKE)\s*\"", re.I)            # string literal in double quotes
 JOIN = re.compile(r"\bJOIN\b", re.I)
+YEAR_FN = re.compile(r"\bYEAR\s*\(", re.I)                          # MySQL-style; SQLite has no YEAR()
+STRFTIME = re.compile(r"\bSTRFTIME\s*\(", re.I)                    # SQLite's way to take a year
 
 
 def load_eval(directory: Path, name: str, lora_scale: float = 1.0):
