@@ -781,8 +781,8 @@ questions:
 
 ## 13. What happens next
 
-Status: everything through Session 9 is on `main` (PRs #1–#3). Session 10 (the decoding fix and the
-re-score) is on `dev`, not yet merged. Candidate next steps, roughly in order of value:
+Status: everything through Session 10 (the decoding fix and the re-score) is on `main`
+(PRs #1–#4). Candidate next steps, roughly in order of value:
 
 1. **v1 to `main` (done).** The repo has a public front page (`README.md` at the root) and an MIT
    `LICENSE`. The planning log was renamed to `docs/PROJECT_LOG.md`. `dev` was merged into `main`
