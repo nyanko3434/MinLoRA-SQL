@@ -56,6 +56,20 @@ def check_held_out(cfg: dict) -> None:
                          "(test_database/ is held out)")
 
 
+def decoding_config(cfg: dict) -> dict:
+    """The decoding settings, read from the config and recorded in every result's meta. The
+    repetition penalty has no default on purpose: Qwen's generation_config.json ships
+    repetition_penalty 1.1, and generate() applies it under do_sample=False too (over the whole
+    context, prompt included), so "greedy" is only greedy when 1.0 is passed explicitly."""
+    if "repetition_penalty" not in cfg["eval"]:
+        raise ValueError("eval.repetition_penalty is required (1.0 = true greedy); the model's own "
+                         "generation_config would otherwise apply its default silently")
+    penalty = cfg["eval"]["repetition_penalty"]
+    if isinstance(penalty, bool) or not isinstance(penalty, (int, float)) or penalty <= 0:
+        raise ValueError(f"eval.repetition_penalty must be a positive number, got {penalty!r}")
+    return {"do_sample": False, "repetition_penalty": float(penalty)}
+
+
 def load_eval_examples(cfg: dict) -> list[Example]:
     d = cfg["data"]
     if eval_format(cfg) == "bird":
@@ -101,7 +115,10 @@ def load_model_for_eval(cfg: dict, lora_checkpoint: str | None = None):
 
 
 @torch.no_grad()
-def generate_sql(model, tokenizer, example: Example, max_new_tokens: int, device: str) -> str:
+def generate_sql(model, tokenizer, example: Example, max_new_tokens: int, device: str,
+                 repetition_penalty: float) -> tuple[str, int, bool]:
+    """(SQL text, number of new tokens, truncated). `truncated` means generation ran into
+    max_new_tokens instead of stopping at an eos token."""
     input_ids = torch.tensor([encode_prompt(tokenizer, example)], device=device)
     attention_mask = torch.ones_like(input_ids)
     output_ids = model.generate(
@@ -109,15 +126,22 @@ def generate_sql(model, tokenizer, example: Example, max_new_tokens: int, device
         attention_mask=attention_mask,
         max_new_tokens=max_new_tokens,
         do_sample=False,
+        # Always explicit: left out, generate() falls back to the model's generation_config,
+        # and Qwen's ships 1.1 (see decoding_config).
+        repetition_penalty=repetition_penalty,
         pad_token_id=tokenizer.pad_token_id,
     )
     generated = output_ids[0][input_ids.shape[1]:]
-    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+    eos = model.generation_config.eos_token_id
+    eos_ids = set(eos if isinstance(eos, (list, tuple)) else [eos]) | {tokenizer.eos_token_id}
+    truncated = len(generated) == 0 or generated[-1].item() not in eos_ids
+    return tokenizer.decode(generated, skip_special_tokens=True).strip(), len(generated), truncated
 
 
 def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = None,
              limit: int | None = None) -> dict:
     check_held_out(cfg)
+    decoding = decoding_config(cfg)
     examples = load_eval_examples(cfg)
     # Same file, same order as the loader, so the two lists join by index.
     difficulties = eval_difficulties(cfg["data"]["eval_path"])
@@ -136,15 +160,19 @@ def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = No
 
     output_path = Path(out or cfg["eval"]["results_path"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    results, n_exec_errors = [], 0
+    results, n_exec_errors, n_truncated = [], 0, 0
     # One line per example as it goes: a crash late in a long eval keeps what finished.
     with open(output_path.with_suffix(".jsonl"), "w", encoding="utf-8") as partial:
         for i, (example, gold, difficulty) in enumerate(zip(examples, gold_rows, difficulties), start=1):
-            predicted_sql = generate_sql(model, tokenizer, example, cfg["eval"]["max_new_tokens"], model.device)
+            predicted_sql, n_new_tokens, truncated = generate_sql(
+                model, tokenizer, example, cfg["eval"]["max_new_tokens"], model.device,
+                decoding["repetition_penalty"],
+            )
             correct, exec_error = execute_and_compare(
                 _db_path(db_dir, example.db_id), predicted_sql, gold, order_matters(example.query)
             )
             n_exec_errors += exec_error is not None
+            n_truncated += truncated
             result = EvalResult(
                 db_id=example.db_id,
                 question=example.question,
@@ -154,7 +182,8 @@ def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = No
                 difficulty=difficulty,
             )
             results.append(result)
-            partial.write(json.dumps({**vars(result), "exec_error": exec_error}) + "\n")
+            partial.write(json.dumps({**vars(result), "exec_error": exec_error,
+                                      "n_new_tokens": n_new_tokens, "truncated": truncated}) + "\n")
             partial.flush()
             if i % 50 == 0 or i == len(examples):
                 acc = sum(r.correct for r in results) / i
@@ -162,7 +191,8 @@ def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = No
                 print(f"{i}/{len(examples)}  EX {acc:.3f}  exec errors {n_exec_errors}  "
                       f"{elapsed / 60:.1f} min  eta {elapsed / i * (len(examples) - i) / 60:.1f} min", flush=True)
 
-    summary = {**compute_metrics(results).to_dict(), "n_pred_exec_errors": n_exec_errors}
+    summary = {**compute_metrics(results).to_dict(), "n_pred_exec_errors": n_exec_errors,
+               "n_truncated": n_truncated}
     sidecar = None
     if lora_checkpoint:
         sidecar = json.loads((Path(lora_checkpoint) / SIDECAR_FILE).read_text())
@@ -174,6 +204,7 @@ def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = No
         "data": cfg["data"],  # format, db_dir, use_evidence, gold_timeout_s, ...
         "limit": limit,
         "max_new_tokens": cfg["eval"]["max_new_tokens"],
+        "decoding": decoding,
         "eval_git_commit": git_commit(),
         "elapsed_s": time.monotonic() - t0,
     }

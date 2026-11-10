@@ -31,6 +31,8 @@ TRAIN_PATH = Path(__file__).resolve().parents[1] / "data" / "spider_data" / "tra
 
 @pytest.fixture(scope="module")
 def train_rows(base_model_and_tokenizer):
+    if not TRAIN_PATH.exists():
+        pytest.skip("Spider is not downloaded to data/spider_data/")
     _, tokenizer = base_model_and_tokenizer
     return [build_train_example(tokenizer, ex) for ex in load_examples(TRAIN_PATH)[:3]]
 

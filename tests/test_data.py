@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import requires_spider
 from transformers import AutoTokenizer
 
 from lora_sql.data import (
@@ -58,6 +59,7 @@ def _load_table_entry(db_id: str) -> dict:
     return next(t for t in tables if t["db_id"] == db_id)
 
 
+@requires_spider
 def test_render_schema_matches_golden_perpetrator_ddl():
     entry = _load_table_entry("perpetrator")
     assert render_schema(entry) == GOLDEN_PERPETRATOR_SCHEMA
@@ -78,6 +80,7 @@ def test_format_prompt_contains_schema_and_question_but_never_the_gold_query():
     assert prompt.endswith("SQL: ")
 
 
+@requires_spider
 def test_load_examples_maps_fields_and_shares_cached_schema_across_rows(tmp_path):
     # Real rows from data/spider_data/train_spider.json (db_id="perpetrator"), trimmed
     # to two, to exercise both field-mapping and the per-db_id schema cache (both rows
@@ -212,7 +215,10 @@ def test_real_bird_dev_loads():
 def coder_tokenizer():
     # local_files_only is the in-code equivalent of HF_HUB_OFFLINE=1 (which can't be set
     # reliably here: conftest has already imported transformers).
-    return AutoTokenizer.from_pretrained(CODER_MODEL, local_files_only=True)
+    try:
+        return AutoTokenizer.from_pretrained(CODER_MODEL, local_files_only=True)
+    except OSError:
+        pytest.skip(f"{CODER_MODEL} tokenizer is not in the local Hugging Face cache")
 
 
 def _perpetrator_example() -> Example:
@@ -247,6 +253,7 @@ def test_encode_prompt_renders_chatml_with_system_prompt(coder_tokenizer):
     assert "You are Qwen" not in text, "the template's default system turn leaked in"
 
 
+@requires_spider
 @pytest.mark.parametrize(
     "make_example",
     [_perpetrator_example, _department_management_example],

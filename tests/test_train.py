@@ -12,7 +12,7 @@ import pytest
 import torch
 import torch.nn as nn
 import yaml
-from conftest import MODEL_NAME
+from conftest import MODEL_NAME, requires_gpu, requires_spider
 
 from lora_sql.checkpoint import load_lora
 from lora_sql.config import config_from_dict, load_config
@@ -36,6 +36,7 @@ def _lora_grads(lora):
     return [t.grad.clone() for m in lora for t in (m.lora_A, m.lora_B)]
 
 
+@requires_spider
 def test_accumulate_window_matches_single_pass(fresh_model, base_model_and_tokenizer):
     _, tokenizer = base_model_and_tokenizer
     rows = [build_train_example(tokenizer, ex) for ex in load_examples(TRAIN_PATH)[:4]]
@@ -116,6 +117,7 @@ def smoke_run(tmp_path_factory, batch):
     return out_dir, cfg, logits
 
 
+@requires_spider
 def test_smoke_run(smoke_run, fresh_model, batch):
     out_dir, cfg, trained_logits = smoke_run
 
@@ -137,6 +139,8 @@ def test_smoke_run(smoke_run, fresh_model, batch):
     _free(loaded)
 
 
+@requires_gpu
+@requires_spider
 def test_budget_guard(tmp_path):
     model = main(_smoke_cfg(tmp_path, time_budget_hours=1e-9), limit_examples=8)
     _free(model)
@@ -148,6 +152,7 @@ def test_budget_guard(tmp_path):
     assert json.loads((tmp_path / "final" / "lora_config.json").read_text())["step"] == 1
 
 
+@requires_spider
 def test_no_clobber(smoke_run, tmp_path):
     out_dir = tmp_path / "run"
     shutil.copytree(smoke_run[0], out_dir)  # a finished run, final/ included
