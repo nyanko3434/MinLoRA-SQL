@@ -18,4 +18,7 @@ data:
   gold_timeout_s: 300
 eval:
   max_new_tokens: 640     # longest BIRD dev gold SQL is 541 tokens (p99 142)
+  # Required. 1.0 = true greedy. Qwen's generation_config.json ships 1.1, which generate()
+  # would apply silently; the archived results in results/eval/**/rp1.1/ were scored that way.
+  repetition_penalty: 1.0
   results_path: results/eval/bird/coder7b_base.json

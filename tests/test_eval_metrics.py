@@ -7,19 +7,23 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from conftest import requires_spider
 
 from lora_sql.eval import runner
-from lora_sql.eval.metrics import DIFFICULTIES, bootstrap_ci, eval_difficulties, holm, mcnemar_p, record_difficulty
+from lora_sql.eval.metrics import (DIFFICULTIES, bootstrap_ci, cluster_bootstrap_ci, eval_difficulties, holm,
+                                   mcnemar_p, record_difficulty)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEV = ROOT / "data" / "spider_data" / "dev.json"
 
 
+@requires_spider
 def test_dev_split_matches_official_counts():
     # The split the official Spider evaluation.py reports for dev.
     assert Counter(eval_difficulties(DEV)) == {"easy": 248, "medium": 446, "hard": 174, "extra": 166}
 
 
+@requires_spider
 @pytest.mark.parametrize("idx, expected", [
     (0, "easy"),     # SELECT count(*) FROM singer
     (8, "easy"),     # SELECT DISTINCT country FROM singer WHERE age > 20
@@ -39,6 +43,7 @@ def test_record_without_sql_dict_is_unknown(tmp_path):
     assert eval_difficulties(path) == ["unknown"]
 
 
+@requires_spider
 def test_run_eval_threads_difficulty(tmp_path, monkeypatch):
     """The runner attaches each example's difficulty by index: in results, the .jsonl and the
     summary's by_difficulty. The model is stubbed; generation returns the gold query."""
@@ -46,7 +51,8 @@ def test_run_eval_threads_difficulty(tmp_path, monkeypatch):
     for key in ("eval_path", "db_dir"):
         cfg["data"][key] = str(ROOT / cfg["data"][key])
     monkeypatch.setattr(runner, "load_model_for_eval", lambda cfg, ckpt=None: (SimpleNamespace(device="cpu"), None))
-    monkeypatch.setattr(runner, "generate_sql", lambda model, tok, example, max_new, device: example.query)
+    monkeypatch.setattr(runner, "generate_sql",
+                        lambda model, tok, example, max_new, device, penalty: (example.query, 7, False))
 
     n = 30
     out = tmp_path / "eval.json"
@@ -58,6 +64,10 @@ def test_run_eval_threads_difficulty(tmp_path, monkeypatch):
     assert [r["difficulty"] for r in report["results"]] == expected
     rows = [json.loads(line) for line in out.with_suffix(".jsonl").read_text().splitlines()]
     assert [r["difficulty"] for r in rows] == expected
+    # The decoding setting and the per-example generation facts are recorded, never implied.
+    assert report["meta"]["decoding"] == {"do_sample": False, "repetition_penalty": 1.0}
+    assert all(r["n_new_tokens"] == 7 and r["truncated"] is False for r in rows)
+    assert summary["n_truncated"] == 0
     assert summary["by_difficulty"] == {
         d: {"accuracy": 1.0, "total": c, "correct": c} for d, c in Counter(expected).items()
     }
@@ -82,7 +92,8 @@ def test_run_eval_bird_format(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(runner, "load_model_for_eval", lambda cfg, ckpt=None: (SimpleNamespace(device="cpu"), None))
     monkeypatch.setattr(runner, "generate_sql",
-                        lambda model, tok, example, max_new, device: seen.append(example) or example.query)
+                        lambda model, tok, example, max_new, device, penalty:
+                        seen.append(example) or (example.query, 7, False))
 
     n = 20
     out = tmp_path / "bird.json"
@@ -121,3 +132,24 @@ def test_bootstrap_ci_brackets_observed_difference():
     resamples = [[rng.randrange(400) for _ in range(400)] for _ in range(1000)]
     lo, hi = bootstrap_ci(a, b, resamples)
     assert lo < 25.0 < hi and lo > 0
+
+
+def test_cluster_bootstrap_ci_widens_when_the_difference_sits_in_one_group():
+    import random
+    n = 400
+    a = [i < 100 or i % 2 == 0 for i in range(n)]   # all of group g0 right, half of the rest
+    b = [i % 2 == 0 for i in range(n)]              # half right everywhere
+    by_question = [str(i) for i in range(n)]        # every question its own group
+    by_db = [f"g{i // 100}" for i in range(n)]      # four groups; the whole gain is in g0
+    observed = 100 * (sum(a) - sum(b)) / n
+
+    rng = random.Random(0)
+    resamples = [[rng.randrange(n) for _ in range(n)] for _ in range(2000)]
+    plain = bootstrap_ci(a, b, resamples)
+    singletons = cluster_bootstrap_ci(a, b, by_question, n_boot=2000)
+    clustered = cluster_bootstrap_ci(a, b, by_db, n_boot=2000)
+
+    assert singletons[0] < observed < singletons[1]
+    assert singletons == pytest.approx(plain, abs=1.0)      # singleton groups = the plain bootstrap
+    assert clustered[1] - clustered[0] > 2 * (plain[1] - plain[0])
+    assert cluster_bootstrap_ci(a, b, by_db, n_boot=2000) == clustered  # seeded

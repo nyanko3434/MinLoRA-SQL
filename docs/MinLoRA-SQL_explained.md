@@ -2,7 +2,8 @@
 
 *A self-contained guide: what the project is, the background you need, what was built, how it was
 run, what the results are, and what is left. Started during run #1 (Session 5); updated at the end of
-Session 6, when all five configs had been trained and scored on Spider dev.*
+Session 6, when all five configs had been trained and scored on Spider dev, and again in Session 10,
+when every eval was re-run with a decoding bug fixed (§11, §12.6).*
 
 ---
 
@@ -34,11 +35,13 @@ the model and trains a tiny add-on. The twist that makes this a strong resume pr
 yourself** and **proved mathematically and empirically that it is bit-for-bit identical** to the industry
 standard library (HuggingFace `peft`). Then you measured improvement the objective way: **run every
 generated query against a real database and check whether it returns the right rows.** Result: five
-fine-tunes trained on the laptop, the best scoring 77.6% on Spider dev vs the untuned model's 75.0%.
-That is a real but small gain, and not statistically conclusive. The likely reason is that the base
+fine-tunes trained on the laptop, the best scoring 79.9% on Spider dev vs the untuned model's 75.9%.
+That is a real gain of 2–4 points, and for two of the five it holds up statistically. But the base
 model already knows Spider well (§12). Then the honest test: on **BIRD**, a different benchmark the
-adapters never saw, the same fine-tunes score **4–5 points *worse*** than the untuned model, a
-clearly significant drop. The adapters mostly learned *Spider's habits*, not better SQL (§12.5).
+adapters never saw, the same fine-tunes score **about 4 points *worse*** than the untuned model, a
+clearly significant drop. The adapters learned a lot of *Spider's habits*, not just better SQL
+(§12.5). Along the way a hidden default in the generation settings turned out to have skewed the
+first round of scores; finding, fixing and measuring that is its own result (§12.6).
 
 ---
 
@@ -237,7 +240,9 @@ training configs use. At scaling 1.5 the old (buggy) order was off by 0.32; the 
 
 The harness was hardened (§11), and the base model plus all five fine-tunes were scored on all 1,034
 dev questions. Every number traces back to the exact checkpoint and code commit that produced it, and
-the differences were tested for statistical significance rather than just eyeballed (§12).
+the differences were tested for statistical significance rather than just eyeballed (§12). Session 10
+found and fixed one flaw in it (a repetition penalty the model's own settings switched on, §11) and
+re-ran everything.
 
 ---
 
@@ -277,6 +282,7 @@ the differences were tested for statistical significance rather than just eyebal
 | **7** | v1 merged to `main` (PR #1). Spider's official difficulty function vendored (Apache-2.0); every dev question tagged easy / medium / hard / extra; accuracy broken down by tier, with no re-run (§11, §12.4) | **95 tests pass.** Split matches the official 248 / 446 / 174 / 166; the gain sits mostly in medium |
 | **8** | BIRD dev downloaded; harness taught BIRD (schema quirks, evidence hints, per-benchmark held-out guard); base + `qv_r16` + `all7_r8` scored zero-shot (~1 h each); `summarize_bird.py` | **106 tests pass.** Base 45.96% → adapters 41.1–41.8% (−4 to −5 pts, p < 0.001): **the Spider gain does not transfer** (§12.5) |
 | **9** | The write-up: `docs/WRITEUP.md`, a ~4,000-word mini-paper (parity → training → harness → Spider → BIRD → discussion); new figure `results/spider_vs_bird.png` from `plot_results.py` | Every table number cross-checked against the generated summaries; linked from the README |
+| **10** | Project review found the evals were not truly greedy: Qwen's settings file switched on a repetition penalty of 1.1. Fixed (the config must now name the value), old results archived under `rp1.1/`, **all nine evals re-run** (~5.5 h). Also: tests skip instead of failing without a GPU or the data, `pytest` pinned, by-database confidence intervals, generated diagnostics replace hand-written claims | **109 tests pass.** Spider: base 75.92% → best 79.88%, two gains now survive correction. BIRD: still −3.8 to −4.5 pts. The numbers in Sessions 6 and 8 above are the old, penalised ones (§12.6) |
 
 ---
 
@@ -308,14 +314,16 @@ scripts/            check_env, toy_train + plot_toy (Session 4 figure), probe_me
                     train_chain.sh (train several configs back to back), plot_train.py (loss plot),
                     eval_chain.sh (score several runs back to back; --config picks Spider or BIRD),
                     summarize_eval.py (Spider results table), summarize_bird.py (BIRD results table),
+                    summary_common.py (what the two share, incl. the decoding comparison),
                     plot_results.py (the Spider-vs-BIRD figure).
-tests/              106 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint,
+tests/              109 tests: injection, fp32 parity, 4-bit parity, data, config, loss, checkpoint,
                     train, eval execution (CPU), difficulty tiers + statistics (CPU), eval runner (GPU).
 licenses/           spider-LICENSE: the Apache-2.0 license of the copied difficulty code.
 results/            COMMITTED: plots and JSON: toy curves, probe numbers, train_loss.png,
                     train/<run>/ (log, data report, adapter description), eval/<name>.json + .jsonl
                     (every prediction), eval/summary.md (the results table), eval/bird/ (the same
-                    for BIRD), spider_vs_bird.png (the write-up's key figure).
+                    for BIRD), eval/rp1.1/ and eval/bird/rp1.1/ (the first-round results, scored
+                    with the repetition penalty on), spider_vs_bird.png (the write-up's key figure).
 docs/               WRITEUP.md (the mini-paper), this explainer.
 runs/               NOT committed: adapter weights and raw logs from training.
 data/               NOT committed: Spider, BIRD dev.
@@ -485,9 +493,19 @@ could not be trusted. Here is what was fixed, and why each fix matters.
 | **Held-out guard** | The runner refuses to run on `test.json` or `test_database/`. The rule is enforced in code, not left to memory. |
 | Results written **as it goes** (`.jsonl`) | A crash at question 900 keeps the first 899. |
 | **Provenance** in every result file | Each result JSON records the adapter's description (rank, targets, training step, config hash) and the code commit, so each number traces back to exactly what produced it. |
+| **Decoding settings are explicit** (Session 10) | See the next paragraph: a default hidden in the model's own files changed 40–66% of the answers. |
 
 Decoding is **greedy** (always pick the most likely token), so every eval is deterministic and
-repeatable. Before the full runs, a 20-question probe checked that the base model outputs bare SQL,
+repeatable. *Greedy needs one more setting than you would think.* The first round of evals asked for
+"no sampling" and nothing else. But the library fills in anything you don't set from a file shipped
+with the model, and Qwen's file says `repetition_penalty: 1.1`: make any token that already appeared
+(in the prompt too) a bit less likely. For SQL that is harmful, because the right answer *has to*
+repeat the table and column names from the prompt. Since Session 10 the eval config must state the
+value (1.0 = off), the runner passes it and writes it into every result file, and a test checks that
+the output equals a plain "pick the top token" loop written by hand. The old results are kept in
+`results/eval/rp1.1/`, and §12.6 shows what changed.
+
+Before the full runs, a 20-question probe checked that the base model outputs bare SQL,
 with no markdown fences or explanations, so the baseline isn't scored down for formatting.
 
 **Difficulty tiers (Session 7).** Spider labels every question **easy**, **medium**, **hard** or
@@ -563,59 +581,75 @@ Every run completed 536/536 steps with no memory problems.
 
 | model | accuracy | change vs base | right that base missed / wrong that base got | p-value (corrected) |
 |---|---|---|---|---|
-| base (no fine-tuning) | **74.95%** | | | |
-| `qv_r8` | 75.92% | +0.97 | +77 / −67 | 0.900 |
-| `qv_r4` | 75.92% | +0.97 | +76 / −66 | 0.900 |
-| `qv_r16` | 77.47% | +2.51 | +85 / −59 | 0.164 |
-| `attn_r8` | 76.79% | +1.84 | +74 / −55 | 0.338 |
-| `all7_r8` | **77.56%** | +2.61 | +88 / −61 | 0.164 |
+| base (no fine-tuning) | **75.92%** | | | |
+| `qv_r8` | 79.11% | +3.19 | +79 / −46 | 0.016 |
+| `qv_r4` | 78.14% | +2.22 | +74 / −51 | 0.125 |
+| `qv_r16` | **79.88%** | +3.97 | +84 / −43 | 0.002 |
+| `attn_r8` | 78.24% | +2.32 | +76 / −52 | 0.125 |
+| `all7_r8` | 78.24% | +2.32 | +82 / −58 | 0.125 |
 
 The full table, with confidence intervals and more comparisons, is in `results/eval/summary.md`.
 
 ### 12.3 How to read it
 
-**Is a 2.5-point gain real?** All six models answered the same 1,034 questions, so they can be
+**Is a 2–4 point gain real?** All six models answered the same 1,034 questions, so they can be
 compared question by question. Only the questions where two models *disagree* carry information. The
 **McNemar test** asks whether "fine-tune right, base wrong" outnumbers "base right, fine-tune wrong"
-by more than chance would. For `qv_r16` and `all7_r8` the raw p-value is about 0.035 (below the usual
-0.05 line). But five fine-tunes were each compared with the base, and testing five things raises the
-odds that one looks good by luck. After the **Holm correction** for that, no p-value is below 0.05.
-So the honest summary is: *every fine-tune scored higher, the best by about 2.5 points, but the gain is
-not statistically conclusive.*
+by more than chance would. Four of the five raw p-values are below the usual 0.05 line. But five
+fine-tunes were each compared with the base, and testing five things raises the odds that one looks
+good by luck. After the **Holm correction** for that, two remain: `qv_r16` (0.002) and `qv_r8`
+(0.016). So the honest summary is: *every fine-tune scored higher, by 2.2 to 4.0 points, and for the
+two best the gain is statistically solid.*
 
-**Fine-tuning reshuffles more than it adds.** Every run fixes 74–88 questions the base got wrong and
-breaks 55–67 it got right. The net gain is the small difference between two big numbers.
+**One more caution: questions come in groups.** The 1,034 questions are about only 20 databases, and
+questions about the same database tend to succeed or fail together. The summary also computes a
+confidence interval that resamples whole databases. It is wider, and only `qv_r16`'s stays clear of
+zero ([+0.8, +7.6]).
 
-**Why so little headroom? The base has probably seen Spider.** Untuned, the base already writes the
-dataset's odd formatting, like `Country ,  COUNT(*)` with the double space, which is a fingerprint of
-Spider's answer key. Spider has been public since 2018, so it is very likely in Qwen2.5-Coder's
-pretraining data. A 75% baseline leaves little for fine-tuning to add, and the remaining gains come
-from matching the dataset's conventions.
+**Fine-tuning reshuffles more than it adds.** Every run fixes 74–84 questions the base got wrong and
+breaks 43–58 it got right. The net gain is the difference between two bigger numbers.
 
-**What fine-tuning actually changed** (from reading questions that flipped):
+**The base has probably seen Spider.** Untuned, the base already writes the dataset's odd
+formatting, like `Country ,  COUNT(*)` with the double space, in 31 of its 1,034 answers. That is a
+fingerprint of Spider's answer key. Spider has been public since 2018, so it is very likely in
+Qwen2.5-Coder's pretraining data. A 76% baseline leaves limited room for fine-tuning to add.
 
-- *Gains* come from adopting Spider's conventions: `INTERSECT` for "both X and Y", `= 'Brazil'` instead
-  of `LIKE '%Brazil%'`, copying values as the question writes them ("Virginia", not "VA"), and fewer
-  unnecessary joins.
-- *Losses* come mostly from inventing column names in Spider's lower_snake_case style that don't exist
-  in the schema (`pet_type` when the real column is `PetType`), and occasionally from dropping a needed
-  `DISTINCT`.
+**What fine-tuning actually changed.** These are now *counted* by the summary script over every
+prediction, not judged from a few examples:
+
+- Spider's doubled-space formatting: 3% of the base's answers, 77% of every fine-tune's (the answer
+  key: 75%).
+- `INTERSECT` for "both X and Y": 2.1% → about 4%, the answer key's rate.
+- `no such column` errors: 37 for the base, 16–25 for the fine-tunes. They read the schema better.
+- Column order: of the 74–84 questions a fine-tune wins, 15–19 are ones where the base had the right
+  rows with the columns in a different order from the answer key (e.g. `country, COUNT(*)` where
+  the key has `COUNT(*), country`).
+- Losses: 81–89% of the questions a fine-tune loses still run and return wrong rows, typically an
+  extra or wrong join.
+- Two older claims did **not** survive counting and were removed: "fewer unnecessary joins" (the
+  fine-tunes write slightly *more* joins than the base, 0.49 vs 0.39 per query, matching the key's
+  0.50) and "`=` instead of `LIKE`" (`LIKE` use is 1.3–1.5% everywhere).
+
+**Empty answers.** 53 of the 1,034 gold queries return nothing at all, so *any* query whose filter
+matches nothing counts as correct there. Leaving those out, the gains are +1.8 to +3.8 points
+instead of +2.2 to +4.0. Small, but it is the reason Spider's official metric uses extra databases.
 
 **The ablations:**
 
-- *Rank on q/v:* r4 = r8 exactly (785 correct each), and r16 beats r8 on 24 questions versus 8
-  (p = 0.007 before correction). Bigger rank helped at 16, but not between 4 and 8.
-- *Target set:* at rank 8, adding k/o (`attn_r8`) and the MLP (`all7_r8`) scored higher than q/v
-  alone (+35/−26 and +50/−33 flipped questions), but neither difference is significant (p = 0.31 and
-  0.08). And `all7_r8`, with 4× the parameters of `qv_r16` and much lower training loss, ties it
-  (40 vs 39 flipped questions).
+- *Rank on q/v:* accuracy rises with rank: 78.14 → 79.11 → 79.88 for r4, r8, r16. r16 beats r4 on 30
+  questions versus 12 (p = 0.008 before correction). Each single step is too small to be significant
+  on its own.
+- *Target set:* at rank 8, adapting more layers did **not** help: `attn_r8` and `all7_r8` both score
+  78.24, a little below `qv_r8` (not significant). And `all7_r8`, with 4× the parameters of `qv_r16`
+  and much lower training loss, scores below it (20 vs 37 flipped questions, p = 0.033 before
+  correction).
 - *Caveat:* each config was trained **once** (one random seed). Without repeats, part of any gap
   between two fine-tunes could be noise from training itself.
 
 **The column-order check.** Rescoring with any column order allowed (as the official eval does) raises
-every model by 2.3–3.2 points, the base most of all (74.95 → 78.14). So the strict harness slightly
-*overstates* the fine-tuning gains, not understates them. `qv_r16` and `all7_r8` swap first and second
-place; the rest of the order is unchanged.
+every model by 2.3–3.8 points, the base most of all (75.92 → 79.69). So the strict harness
+*overstates* the fine-tuning gains: under the looser rule they are +0.9 to +2.9 points. The ranking of
+the top two (`qv_r16`, `qv_r8`) is unchanged.
 
 ### 12.4 Accuracy by difficulty
 
@@ -623,27 +657,26 @@ Each cell is accuracy on that tier, with the change against the base in parenthe
 
 | model | easy (248) | medium (446) | hard (174) | extra (166) | all (1,034) |
 |---|---|---|---|---|---|
-| base | 90.32 | 75.34 | 70.11 | 56.02 | 74.95 |
-| `qv_r8` | 89.92 (−0.40) | 78.25 (+2.91) | 68.97 (−1.15) | 56.02 (+0.00) | 75.92 (+0.97) |
-| `qv_r4` | 89.52 (−0.81) | 78.70 (+3.36) | 69.54 (−0.57) | 54.82 (−1.20) | 75.92 (+0.97) |
-| `qv_r16` | 90.32 (+0.00) | 79.82 (+4.48) | 72.41 (+2.30) | 57.23 (+1.20) | 77.47 (+2.51) |
-| `attn_r8` | 90.73 (+0.40) | 77.58 (+2.24) | 72.41 (+2.30) | 58.43 (+2.41) | 76.79 (+1.84) |
-| `all7_r8` | 91.13 (+0.81) | 79.37 (+4.04) | 72.99 (+2.87) | 57.23 (+1.20) | 77.56 (+2.61) |
+| base | 91.53 | 76.23 | 71.84 | 56.02 | 75.92 |
+| `qv_r8` | 90.32 (−1.21) | 81.84 (+5.61) | 75.29 (+3.45) | 59.04 (+3.01) | 79.11 (+3.19) |
+| `qv_r4` | 91.13 (−0.40) | 80.94 (+4.71) | 72.99 (+1.15) | 56.63 (+0.60) | 78.14 (+2.22) |
+| `qv_r16` | 91.94 (+0.40) | 82.29 (+6.05) | 76.44 (+4.60) | 59.04 (+3.01) | 79.88 (+3.97) |
+| `attn_r8` | 91.13 (−0.40) | 79.82 (+3.59) | 75.86 (+4.02) | 57.23 (+1.20) | 78.24 (+2.32) |
+| `all7_r8` | 91.53 (+0.00) | 80.49 (+4.26) | 75.29 (+3.45) | 55.42 (−0.60) | 78.24 (+2.32) |
 
 **How to read it:**
 
-- **The tiers behave as labelled.** The base goes from 90% on easy down to 56% on extra.
+- **The tiers behave as labelled.** The base goes from 92% on easy down to 56% on extra.
 - **The gain sits mostly in medium.** Take questions won minus lost against the base:
-  - On medium, every fine-tune nets +10 to +20.
-  - On easy, hard and extra combined, the net is between −5 and +9.
-  - `qv_r4` and `qv_r8` gain *only* on medium; they slightly lose on easy and hard.
-  - The bigger adapters (`qv_r16`, `attn_r8`, `all7_r8`) also pick up a few hard questions.
-- **Extra-hard questions churn but don't improve.** 23–27% of them flip one way or the other in
-  every run, the most of any tier, yet the net change is only −2 to +4 questions.
-  - One plausible reading, *not yet checked against the flipped questions*: fine-tuning mostly
-    teaches Spider's conventions (§12.3), and those fixes pay off most on mid-sized queries.
+  - On medium, every fine-tune nets +16 to +27.
+  - On easy, hard and extra combined, the net is +2 to +14.
+  - Every fine-tune also picks up a few hard questions (+2 to +8).
+- **Extra-hard questions churn but barely improve.** 22–26% of them flip one way or the other in
+  every run, the most of any tier, yet the net change is only −1 to +5 questions.
+  - One plausible reading, *not yet checked against the flipped questions*: fine-tuning's fixes pay
+    off most on mid-sized queries.
   - On long queries, a fix in one clause can be undone by a mistake in another.
-- **Easy is near the ceiling.** At 90%, there is little left to gain there.
+- **Easy is near the ceiling.** At 92%, there is little left to gain there.
 - **Sample sizes are small.** On extra, one question moves accuracy by 0.6 points, so per-tier
   differences of a point or two are descriptive, not tested.
 
@@ -656,45 +689,80 @@ trained on. BIRD has 11 different databases with bigger, messier schemas, and ha
 
 | model | accuracy (strict) | change vs base | right that base missed / wrong that base got | p-value (corrected) | BIRD's official score |
 |---|---|---|---|---|---|
-| base (no fine-tuning) | **45.96%** | | | | **50.39%** |
-| `qv_r16` | 41.13% | −4.82 | +99 / −173 | 0.00002 | 45.37% |
-| `all7_r8` | 41.79% | −4.17 | +101 / −165 | 0.0001 | 46.22% |
+| base (no fine-tuning) | **46.68%** | | | | **51.37%** |
+| `qv_r16` | 42.89% | −3.78 | +105 / −163 | 0.0005 | 48.24% |
+| `all7_r8` | 42.18% | −4.50 | +91 / −160 | 0.00003 | 47.33% |
 
 **How to read it:**
 
-- **The fine-tunes are clearly worse here.** On Spider the gain was +2.5 points and not
-  conclusive. Here the loss is 4–5 points, and the p-values are tiny: if fine-tuning really made no
-  difference, a gap this big would turn up by luck about 1 time in 10,000 or less.
-  - The 95% confidence intervals ([−7.0, −2.7] and [−6.2, −2.0]) are entirely below zero.
-  - The drop shows on every difficulty level (largest on "challenging") and on 8–9 of the 11
-    databases.
+- **The fine-tunes are clearly worse here.** On Spider they gained 2–4 points. Here they lose about
+  4, and the p-values are tiny: if fine-tuning really made no difference, a gap this big would turn
+  up by luck about 1 time in 2,000 or less.
+  - The 95% confidence intervals ([−5.9, −1.8] and [−6.5, −2.5]) are entirely below zero.
+  - Resampling whole databases (there are only 11), the interval stays below zero for `all7_r8`
+    ([−7.2, −1.9]) and just touches it for `qv_r16` ([−7.9, +0.2]).
+  - The drop shows on every difficulty level (largest on "challenging"), and on 6 (`qv_r16`) and 9
+    (`all7_r8`) of the 11 databases.
 - **Why: the adapters learned Spider's *habits*.** The summary script counts these in every
   prediction:
-  - Spider's answer key writes `a  =  b` with doubled spaces. That shows up in 74–77% of the
+  - Spider's answer key writes `a  =  b` with doubled spaces. That shows up in 79–81% of the
     adapters' BIRD answers, against under 1% for the base model. Harmless in itself, but it shows
     how strongly the Spider style was stamped in.
-  - Spider puts string values in double quotes. Over half of the adapters' answers now do too
+  - Spider often puts string values in double quotes. 35–39% of the adapters' answers now do too
     (base: 0%).
   - **Literal values copied as written.** "1995-9-4" stays `"1995-9-4"`, but the database stores
-    `1995-09-04`. On Spider, copying literals was a *gain* (§12.3); on BIRD it is a loss.
+    `1995-09-04`; "president" stays lower-case where the stored value is `President`.
   - **Hints copied instead of translated.** BIRD's hints are written in pseudo-SQL like
     `YEAR(CreationDate) = 2011`, and SQLite has no `YEAR()`. The base model usually translates it
-    to SQLite's `STRFTIME`. The adapters copy it in 28% of those questions (base: 5%), and the
-    query crashes.
-  - Most lost questions (about 70%) are not crashes at all. The SQL runs and returns the wrong
-    rows: a dropped hint condition, the wrong table, fewer columns.
-- **What it means for the project.** The small Spider gain was mostly *fitting the benchmark*, not
-  getting better at SQL. For a resume project this is a stronger result than a bigger Spider
-  number: it is a measured, significant finding about what LoRA fine-tuning on one dataset does,
-  and the parity claim and the harness made it possible to trust it.
-- **Caveats.** One training seed per adapter, but a 4–5 point drop with p < 0.001 is far bigger
-  than seed noise is likely to be. Qwen2.5-Coder (2024) could also have seen BIRD (2023), so BIRD
-  is "less likely contaminated", not certainly clean.
+    to SQLite's `STRFTIME` (72% of those questions). The adapters copy it in 27–28% of them
+    (base: 5%), and the query crashes.
+  - Most lost questions (72–75%) are not crashes at all. The SQL runs and returns the wrong rows:
+    a dropped `DISTINCT`, fewer output columns, an extra condition nobody asked for, the wrong
+    table.
+- **What it means for the project.** A good part of the Spider gain was *fitting the benchmark*,
+  not getting better at SQL in general. For a resume project this is a stronger result than a
+  bigger Spider number: it is a measured, significant finding about what LoRA fine-tuning on one
+  dataset does, and the parity claim and the harness made it possible to trust it.
+- **Caveats.** One training seed per adapter, but a 4-point drop with p < 0.001 is bigger than
+  seed noise is likely to be. Qwen2.5-Coder (2024) could also have seen BIRD (2023), so BIRD is
+  "less likely contaminated", not certainly clean.
 
 Full tables (by difficulty, by database, error types, style counts) are in
 `results/eval/bird/summary.md`.
 
-### 12.6 Where the claims stand
+### 12.6 The decoding fix: what a hidden default did
+
+Sessions 6 and 8 scored everything with a repetition penalty of 1.1 that nobody had asked for (§11
+explains how it got in). Session 10 re-ran all nine evals with it off. Same checkpoints, same
+questions:
+
+| model | Spider, penalty on | Spider, off | change | BIRD, penalty on | BIRD, off | change |
+|---|---|---|---|---|---|---|
+| base | 74.95 | 75.92 | +0.97 | 45.96 | 46.68 | +0.72 |
+| `qv_r4` | 75.92 | 78.14 | +2.22 | | | |
+| `qv_r8` | 75.92 | 79.11 | +3.19 | | | |
+| `qv_r16` | 77.47 | 79.88 | +2.42 | 41.13 | 42.89 | +1.76 |
+| `attn_r8` | 76.79 | 78.24 | +1.45 | | | |
+| `all7_r8` | 77.56 | 78.24 | +0.68 | 41.79 | 42.18 | +0.39 |
+
+**How to read it:**
+
+- **A "tiny" setting rewrote almost half the answers.** 40–42% of the Spider predictions and
+  47–66% of the BIRD predictions are different text.
+- **Every score went up, the fine-tunes' the most.** The penalty discourages repeating words from
+  the prompt, and column names *are* words from the prompt. With it on, the fine-tunes made 32–41
+  `no such column` errors on Spider; with it off, 16–25. (The base: 37 both times.)
+- **One conclusion flipped.** With the penalty, the Spider gain looked like "+1 to +2.6 points, not
+  statistically conclusive, `all7_r8` best". Without it: "+2.2 to +4.0, two of five solid, `qv_r16`
+  best".
+- **One conclusion held.** BIRD: −4.2 to −4.8 points with the penalty, −3.8 to −4.5 without.
+  Significant both times, same mechanism.
+- **The lesson for the resume.** `do_sample=False` is not the same as "greedy". Check what the
+  model's own `generation_config.json` switches on, set every decoding parameter yourself, and
+  record it with the results. Both sets of results are committed, so the claim can be checked.
+
+### 12.7 Where the claims stand
+
 
 | claim | status |
 |---|---|
@@ -703,27 +771,28 @@ Full tables (by difficulty, by database, error types, style counts) are in
 | Bit-identical to peft on the QLoRA path (4-bit, incl. non-power-of-two scaling) | ✅ earned |
 | Fine-tuned 7B on an 8 GB laptop GPU via your own QLoRA loop | ✅ earned: five runs, peak ≤ 6.74 GB |
 | A rigorous, reproducible execution-accuracy harness | ✅ earned |
-| Improvement in execution accuracy over the base model on Spider dev | ⚠️ measured: +1 to +2.6 points, not statistically conclusive, base likely contaminated |
-| Rank and target-set ablation findings | ⚠️ measured, single seed |
+| Improvement in execution accuracy over the base model on Spider dev | ✅ measured: +2.2 to +4.0 points; significant after correction for `qv_r16` and `qv_r8`; base likely contaminated |
+| Rank and target-set ablation findings | ⚠️ measured, single seed: accuracy rises with rank; more target modules did not help |
 | Where the gains sit (Spider difficulty tiers) | ✅ measured: mostly medium; per-tier gaps descriptive (small n) |
-| Generalization to BIRD-dev | ❌ measured: does **not** generalize (−4 to −5 points vs base, p < 0.001); the adapters learned Spider's conventions |
+| Generalization to BIRD-dev | ❌ measured: does **not** generalize (−3.8 to −4.5 points vs base, p < 0.001); the adapters learned Spider's conventions |
+| Decoding is what the write-up says it is | ✅ fixed and measured (Session 10): the inherited repetition penalty is off, tested, recorded per result; both rounds committed |
 
 ---
 
 ## 13. What happens next
 
-Status: v1 is on `main` (merged from `dev` in PR #1), and work continues on `dev`. Candidate next
-steps, roughly in order of value:
+Status: everything through Session 9 is on `main` (PRs #1–#3). Session 10 (the decoding fix and the
+re-score) is on `dev`, not yet merged. Candidate next steps, roughly in order of value:
 
 1. **v1 to `main` (done).** The repo has a public front page (`README.md` at the root) and an MIT
    `LICENSE`. The planning log was renamed to `docs/PROJECT_LOG.md`. `dev` was merged into `main`
    through PR #1.
 2. **Difficulty breakdown (done, Session 7).** Spider's official `eval_hardness()` was copied in, and
    accuracy is split into easy / medium / hard / extra (§12.4). The gain sits mostly in medium.
-3. **BIRD-dev zero-shot (done, Session 8).** Base vs `qv_r16` and `all7_r8`: the fine-tunes are 4–5
-   points *worse* (§12.5). This changes what comes next.
-4. **Write-up (done, Session 9).** `docs/WRITEUP.md`. It leads with parity, then the harness, the
-   small Spider gain, and the significant BIRD loss that explains it. Figure 3 there
+3. **BIRD-dev zero-shot (done, Session 8; re-scored in Session 10).** Base vs `qv_r16` and
+   `all7_r8`: the fine-tunes are about 4 points *worse* (§12.5). This changes what comes next.
+4. **Write-up (done, Session 9; revised in Session 10).** `docs/WRITEUP.md`. It leads with parity,
+   then the harness, the Spider gain, the significant BIRD loss, and the decoding ablation. Figure 3 there
    (`results/spider_vs_bird.png`) shows both on one scale.
 5. **Cheap follow-up, no retraining:** score with the adapter turned down (e.g. half its scaling)
    on both Spider and BIRD. If BIRD recovers while Spider holds, the trade-off is tunable.
@@ -734,7 +803,11 @@ steps, roughly in order of value:
    `summarize_eval.py` already reports it as a robustness column.
 8. **Write-up polish (optional):** a PDF export, or a shorter blog-post version for a portfolio
    site.
-9. **Dropped** (recommended): the "peft-fine-tuned 7B" comparison row. Parity already shows the two
+9. **Score `qv_r8` on BIRD (~1 h).** It is now second on Spider and was never run on BIRD, because
+   the two BIRD adapters were chosen under the old scores.
+10. **CI and lint (deferred).** A GitHub Actions job could run the CPU tests now that tests skip
+   cleanly without a GPU or the data; `ruff` for linting.
+11. **Dropped** (recommended): the "peft-fine-tuned 7B" comparison row. Parity already shows the two
    implementations compute the same thing, so a second 2.3 h training run adds nothing.
 
 ---

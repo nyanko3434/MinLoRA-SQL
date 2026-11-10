@@ -1,6 +1,11 @@
-"""Aggregate execution accuracy, broken down by Spider difficulty (easy / medium / hard / extra)."""
+"""Scoring aggregates for the eval harness:
+- execution accuracy overall and by difficulty (Spider's official tiers via the vendored
+  eval_hardness, or BIRD's own labels);
+- the paired statistics both summary scripts share (exact McNemar, Holm, bootstrap CIs).
+"""
 
 import json
+import random
 from collections import defaultdict
 from dataclasses import dataclass, field
 from math import comb
@@ -216,3 +221,24 @@ def bootstrap_ci(a: list[bool], b: list[bool], resamples: list[list[int]]) -> tu
     diff = [x - y for x, y in zip(a, b)]
     stats = sorted(sum(diff[i] for i in s) / n for s in resamples)
     return 100 * stats[int(0.025 * len(stats))], 100 * stats[int(0.975 * len(stats)) - 1]
+
+
+def cluster_bootstrap_ci(a: list[bool], b: list[bool], groups: list[str], n_boot: int = 5000,
+                         seed: int = 0) -> tuple[float, float]:
+    """95% paired cluster bootstrap CI, in percentage points, of mean(a) - mean(b). Whole groups
+    (databases) are resampled with replacement, so questions that share a database move together;
+    bootstrap_ci above treats every question as independent. The statistic is the ratio
+    (summed difference) / (questions drawn). With only 11-20 groups a percentile interval still
+    runs a little narrow, so read it as a sanity check on the question-level CI, not a replacement."""
+    cells: dict[str, list[int]] = defaultdict(lambda: [0, 0])  # group -> [summed difference, n]
+    for x, y, g in zip(a, b, groups, strict=True):
+        cells[g][0] += x - y
+        cells[g][1] += 1
+    per_group = list(cells.values())
+    rng = random.Random(seed)
+    stats = []
+    for _ in range(n_boot):
+        draw = [per_group[rng.randrange(len(per_group))] for _ in per_group]
+        stats.append(sum(d for d, _ in draw) / sum(n for _, n in draw))
+    stats.sort()
+    return 100 * stats[int(0.025 * n_boot)], 100 * stats[int(0.975 * n_boot) - 1]

@@ -10,12 +10,14 @@ import bitsandbytes as bnb
 import pytest
 import torch
 import torch.nn as nn
-from conftest import MODEL_NAME
+from conftest import MODEL_NAME, requires_gpu
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora.bnb import Linear4bit as PeftLoraLinear4bit
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 
 from lora_sql.lora import LoRALinear, inject_lora
+
+pytestmark = requires_gpu
 
 BNB_CONFIG = BitsAndBytesConfig(
     load_in_4bit=True,

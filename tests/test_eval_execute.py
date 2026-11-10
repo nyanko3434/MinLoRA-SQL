@@ -11,7 +11,7 @@ from lora_sql.data import Example
 from lora_sql.eval import execute
 from lora_sql.eval.execute import (ExecutionError, bird_set_match, execute_and_compare, order_matters, results_match,
                                    run_query)
-from lora_sql.eval.runner import check_held_out, gold_preflight, load_config
+from lora_sql.eval.runner import check_held_out, decoding_config, gold_preflight, load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -150,6 +150,17 @@ def test_eval_configs_pass_guard(path):
     cfg = load_config(ROOT / path)
     check_held_out(cfg)
     assert set(cfg["model"]) == {"name_or_path", "quant", "double_quant", "dtype"}
+    # Every shipped eval config is true greedy; the model's own default (1.1) is never inherited.
+    assert decoding_config(cfg) == {"do_sample": False, "repetition_penalty": 1.0}
+
+
+def test_decoding_config_has_no_silent_default():
+    with pytest.raises(ValueError, match="repetition_penalty is required"):
+        decoding_config({"eval": {"max_new_tokens": 8}})
+    for bad in (True, "1.0", 0, -1.1):
+        with pytest.raises(ValueError, match="positive number"):
+            decoding_config({"eval": {"repetition_penalty": bad}})
+    assert decoding_config({"eval": {"repetition_penalty": 1.1}}) == {"do_sample": False, "repetition_penalty": 1.1}
 
 
 def test_gold_preflight(tmp_path):

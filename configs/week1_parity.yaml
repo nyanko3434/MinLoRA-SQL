@@ -11,4 +11,7 @@ data:
   db_dir: data/spider_data/database     # never test_database/ (runner.check_held_out enforces it)
 eval:
   max_new_tokens: 256     # longest training SQL is 202 tokens
+  # Required. 1.0 = true greedy. Qwen's generation_config.json ships 1.1, which generate()
+  # would apply silently; the archived results in results/eval/**/rp1.1/ were scored that way.
+  repetition_penalty: 1.0
   results_path: runs/eval_smoke.json

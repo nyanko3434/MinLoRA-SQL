@@ -2,6 +2,7 @@
 (results/eval/bird/<name>.json + .jsonl). Run from repo root, after the BIRD eval chain:
 
     python scripts/summarize_bird.py
+    python scripts/summarize_bird.py --results-dir results/eval/bird/rp1.1   # regenerate the archive's table
 
 CPU only. Every gold query and every prediction is re-executed read-only:
 - the gold queries with the eval config's gold deadline;
@@ -11,9 +12,15 @@ Two scores come out of that:
 - BIRD's official EX rule, set(pred) == set(gold), so the numbers can be compared with
   published zero-shot BIRD results.
 Significance is paired over the same 1,534 questions: exact McNemar, Holm across the
-comparisons with base, and a 95% paired bootstrap CI (5,000 resamples, seed 0). The style
-diagnostics are counted from the predictions, not hand-picked.
+comparisons with base, and a 95% paired bootstrap CI (5,000 resamples, seed 0), once resampling
+questions and once resampling whole databases. The style diagnostics are counted from the
+predictions, not hand-picked.
+
+The decoding setting is read from each result's meta, never assumed: the main directory must be
+true greedy (repetition penalty 1.0), and when its rp1.1/ archive is present a "Decoding ablation"
+section compares the two.
 """
+import argparse
 import json
 import random
 import re
@@ -21,35 +28,58 @@ from collections import Counter
 from pathlib import Path
 
 import yaml
+from summary_common import (DQ_LITERAL, GREEDY, JOIN, LEGACY_DIR, SPIDER_SPACING, ablation_section, decoding_label,
+                            below_zero_clause, error_kind, fmt_range, is_empty_result, share, shared_decoding,
+                            truncated_cell)
+from summary_common import load_eval as load_results
 
 from lora_sql.data import bird_question
 from lora_sql.eval.execute import (DEFAULT_TIMEOUT_S, ExecutionError, bird_set_match, order_matters,
                                    results_match, run_query)
-from lora_sql.eval.metrics import bootstrap_ci, holm, mcnemar_p
+from lora_sql.eval.metrics import bootstrap_ci, cluster_bootstrap_ci, holm, mcnemar_p
 
 CONFIG = Path("configs/eval/coder7b_bird_dev.yaml")
 RUNS = ["qv_r16", "all7_r8"]
 NAMES = ["base", *RUNS]
 LEVELS = ["simple", "moderate", "challenging"]
-OUT = Path("results/eval/bird/summary.md")
+RESULTS = Path("results/eval/bird")
 N_BOOT = 5000
 
-SPIDER_SPACING = re.compile(r"\S {2}(?:=|>=|<=|!=|<|>) {2}\S| ,  ")  # Spider gold's `a  =  b`, `x ,  y`
-DQ_LITERAL = re.compile(r"(?:=|!=|<>|\bLIKE)\s*\"", re.I)            # string literal in double quotes
 YEAR_FN = re.compile(r"\bYEAR\s*\(", re.I)                          # MySQL-style; SQLite has no YEAR()
 CAST = re.compile(r"\bCAST\s*\(", re.I)
+DISTINCT = re.compile(r"\bDISTINCT\b", re.I)
 STRFTIME = re.compile(r"\bSTRFTIME\s*\(", re.I)                    # SQLite's way to take a year
-JOIN = re.compile(r"\bJOIN\b", re.I)
+
+# Notes from reading predictions by hand. They describe one set of predictions, so they are keyed
+# by the repetition penalty those predictions were decoded with and printed only for that set.
+HAND_READ = {
+    1.0: [
+        "- **From reading a random sample of 15 lost questions per adapter:**",
+        "  - Literal values are copied as the question writes them: `\"president\"` for a stored `'President'`, "
+        "`\"9/9/2019\"` for `2019-09-09`, `= \"null\"` for `IS NULL`. Spider's gold "
+        "copies literals this way.",
+        "  - `DISTINCT` is dropped where base keeps it, and output columns are pared down (a league name without "
+        "the requested goal total, two of six administrator columns).",
+        "  - Conditions are added that the question does not ask for (`status = \"approved\"`, `color != '[]'`), "
+        "or a column or table is used that the schema lacks or that is the wrong one for the question.",
+        "  - `ORDER BY ... LIMIT 1` is replaced by `= (SELECT MAX(...))`, which returns every tie.",
+    ],
+    1.1: [
+        "- **From reading a random sample of 15 lost questions per adapter:**",
+        "  - Literal values are copied as the question writes them: `\"1995-9-4\"` for a stored `1995-09-04`, "
+        "`\"No.667467\"`, `\"female\"` for `'Female'`. This was a *gain* on Spider, whose gold copies literals.",
+        "  - Hint instructions are partly ignored: a requested `CASE`, a symmetric `OR`, a `SUM ... GROUP BY`.",
+        "  - The wrong join path or table is used on BIRD's larger schemas.",
+        "  - Output columns are pared down or swapped, Spider-style.",
+    ],
+}
 
 
-def load_eval(name, cfg):
-    report = json.loads(Path(f"results/eval/bird/{name}.json").read_text())
+def load_eval(results_dir, name, cfg):
+    report, rows = load_results(results_dir, name)
     meta = report["meta"]
-    assert meta["limit"] is None, f"{name} was a --limit smoke run"
     assert meta["data"]["format"] == "bird" and meta["data"]["use_evidence"] is True, f"{name}: not the BIRD-with-evidence setting"
     assert meta["data"]["eval_path"] == cfg["data"]["eval_path"], f"{name}: evaluated a different file"
-    rows = [json.loads(l) for l in Path(f"results/eval/bird/{name}.jsonl").read_text().splitlines()]
-    assert len(rows) == len(report["results"]) == report["summary"]["total"]
     if name != "base":
         sidecar = json.loads(Path(f"results/train/{name}/lora_config.json").read_text())
         assert meta["checkpoint_sidecar"]["config_sha256"] == sidecar["config_sha256"], (
@@ -57,32 +87,25 @@ def load_eval(name, cfg):
     return report, rows
 
 
-def error_kind(err):
-    if not err:
-        return None
-    if err.startswith("no such column"):
-        return "no such column"
-    if err.startswith("no such function"):
-        return "no such function"
-    if err.startswith("no such table"):
-        return "no such table"
-    if err == "interrupted":
-        return "timeout (30 s)"
-    if "syntax error" in err or err.startswith("near "):
-        return "syntax"
-    return "other"
-
-
 def pct(k, n):
     return 100 * k / n if n else 0.0
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--results-dir", type=Path, default=RESULTS)
+    parser.add_argument("--out", type=Path, default=None, help="default: <results-dir>/summary.md")
+    args = parser.parse_args()
+    results_dir, out = args.results_dir, args.out or args.results_dir / "summary.md"
+
     cfg = yaml.safe_load(CONFIG.read_text())
     d = cfg["data"]
     db_dir = Path(d["db_dir"])
     dev = json.loads(Path(d["eval_path"]).read_text())
-    evals = {n: load_eval(n, cfg) for n in NAMES}
+    evals = {n: load_eval(results_dir, n, cfg) for n in NAMES}
+    decoding = shared_decoding({n: evals[n][0] for n in NAMES})
+    if results_dir == RESULTS:
+        assert decoding == GREEDY, f"the main results must be true greedy, got {decoding}"
     n_q = len(dev)
     for n in NAMES:
         rows = evals[n][1]
@@ -126,6 +149,9 @@ def main():
     raw_p = {n: mcnemar_p(*vs_base[n]) for n in RUNS}
     holm_p = dict(zip(RUNS, holm([raw_p[n] for n in RUNS])))
     ci = {n: bootstrap_ci(correct[n], correct["base"], resamples) for n in RUNS}
+    db_ids = [rec["db_id"] for rec in dev]
+    cluster_ci = {n: cluster_bootstrap_ci(correct[n], correct["base"], db_ids, N_BOOT) for n in RUNS}
+    n_empty = sum(is_empty_result(g) for g in gold_rows)
     ex = {n: pct(sum(correct[n]), n_q) for n in NAMES}
     ex_off = {n: pct(sum(official[n]), n_q) for n in NAMES}
     n_err = {n: evals[n][0]["summary"]["n_pred_exec_errors"] for n in NAMES}
@@ -133,8 +159,8 @@ def main():
     lines = [
         "# BIRD dev results (zero-shot)",
         "",
-        "Generated by `scripts/summarize_bird.py` from `results/eval/bird/*.json`. Qwen2.5-Coder-7B-Instruct, "
-        f"nf4 + bf16 compute, greedy decoding, {n_q} BIRD dev questions (release `dev_20240627`) with the expert "
+        f"Generated by `scripts/summarize_bird.py` from `{results_dir}/*.json`. Qwen2.5-Coder-7B-Instruct, "
+        f"nf4 + bf16 compute, {decoding_label(decoding)}, {n_q} BIRD dev questions (release `dev_20240627`) with the expert "
         "evidence appended to each question as `Hint:`. The adapters were trained on Spider only; BIRD is never "
         "trained on. Execution accuracy against `dev_databases/`.",
         "",
@@ -143,15 +169,21 @@ def main():
         "`set(pred) == set(gold)`, which ignores row order and duplicates; use it to compare with published "
         "BIRD numbers.",
         "",
-        "| model | EX % strict | Δ vs base | 95% CI | McNemar p (Holm) | won / lost vs base | pred exec errors | EX % official |",
-        "|---|---|---|---|---|---|---|---|",
-        f"| base | {ex['base']:.2f} | | | | | {n_err['base']} | {ex_off['base']:.2f} |",
+        "| model | EX % strict | Δ vs base | 95% CI | 95% CI, by database | McNemar p (Holm) | won / lost vs base | pred exec errors | truncated | EX % official |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+        f"| base | {ex['base']:.2f} | | | | | | {n_err['base']} | {truncated_cell(evals['base'][0])} | {ex_off['base']:.2f} |",
     ]
     for n in RUNS:
         w, l = vs_base[n]
         lo, hi = ci[n]
+        c_lo, c_hi = cluster_ci[n]
         lines.append(f"| {n} | {ex[n]:.2f} | {ex[n] - ex['base']:+.2f} | [{lo:+.2f}, {hi:+.2f}] | "
-                     f"{raw_p[n]:.1e} ({holm_p[n]:.1e}) | +{w} / −{l} | {n_err[n]} | {ex_off[n]:.2f} |")
+                     f"[{c_lo:+.2f}, {c_hi:+.2f}] | "
+                     f"{raw_p[n]:.1e} ({holm_p[n]:.1e}) | +{w} / −{l} | {n_err[n]} | {truncated_cell(evals[n][0])} | "
+                     f"{ex_off[n]:.2f} |")
+    lines += ["", f"\"95% CI\" resamples the {n_q} questions; \"by database\" resamples the {len(set(db_ids))} "
+              f"databases whole, so questions that share a database move together. {n_empty} gold "
+              f"quer{'y returns' if n_empty == 1 else 'ies return'} an empty result."]
     w, l = won_lost("all7_r8", "qv_r16")
     lines += ["", f"Head to head: all7_r8 vs qv_r16 won / lost +{w} / −{l}, McNemar p = {mcnemar_p(w, l):.3f}."]
 
@@ -190,17 +222,13 @@ def main():
     golds = [rec["SQL"] for rec in dev]
     year_hint = [i for i in range(n_q) if YEAR_FN.search(dev[i]["evidence"] or "")]
 
-    def share(rx, sqls, idx=None):
-        idx = range(len(sqls)) if idx is None else idx
-        return pct(sum(bool(rx.search(sqls[i])) for i in idx), len(idx))
-
     lines += ["", "## What changed: style diagnostics", "",
               "Counted over all predictions. The gold column is the BIRD reference SQL.", "",
               "| measure | gold | " + " | ".join(NAMES) + " |", "|---|---|" + "---|" * len(NAMES)]
     for label, rx in [("Spider gold spacing (`a  =  b`, `x ,  y`) %", SPIDER_SPACING),
                       ("string literal in double quotes %", DQ_LITERAL),
                       ("uses `YEAR(...)` (no such function in SQLite) %", YEAR_FN),
-                      ("uses `CAST(...)` %", CAST)]:
+                      ("uses `CAST(...)` %", CAST), ("uses `DISTINCT` %", DISTINCT)]:
         lines.append(f"| {label} | {share(rx, golds):.1f} | " + " | ".join(f"{share(rx, preds[n]):.1f}" for n in NAMES) + " |")
     for label, rx in [("uses `YEAR(...)`", YEAR_FN), ("uses SQLite's `STRFTIME(...)`", STRFTIME)]:
         lines.append(f"| {label} when the hint itself writes `YEAR(` (n={len(year_hint)}) % | "
@@ -220,31 +248,39 @@ def main():
     lost = {n: [i for i in range(n_q) if correct["base"][i] and not correct[n][i]] for n in RUNS}
     silent = {n: sum(not evals[n][1][i]["exec_error"] for i in lost[n]) for n in RUNS}
 
-    fmt_range = lambda vals, f="{:.2f}": f"{f.format(min(vals))}–{f.format(max(vals))}" if min(vals) != max(vals) else f.format(vals[0])
     drop = [ex["base"] - ex[n] for n in RUNS]
     sig = all(holm_p[n] < 0.05 for n in RUNS)
+    all_below = all(x > 0 for x in drop)
     lines += [
         "",
         "## Reading these numbers",
         "",
-        f"- **Headline: Spider fine-tuning hurts on BIRD.** Both adapters score below the untuned base, by "
-        f"{fmt_range(drop)} points strict ({ex['base']:.2f} → {', '.join(f'{n} {ex[n]:.2f}' for n in RUNS)}). "
+        ("- **Headline: Spider fine-tuning hurts on BIRD.** Both adapters score below the untuned base, by "
+         if all_below else
+         "- **Headline: the adapters do not both score below base.** Base minus adapter is ")
+        + f"{fmt_range(drop)} points strict ({ex['base']:.2f} → {', '.join(f'{n} {ex[n]:.2f}' for n in RUNS)}). "
         f"They lose {fmt_range([vs_base[n][1] for n in RUNS], '{}')} questions the base got right and win "
         f"{fmt_range([vs_base[n][0] for n in RUNS], '{}')}. "
-        + ("Both drops are significant after Holm correction" if sig else "Not every drop survives Holm correction")
-        + f" (adjusted p ≤ {max(holm_p.values()):.1e}), and both bootstrap CIs lie "
-        + ("entirely below zero." if all(ci[n][1] < 0 for n in RUNS) else "partly above zero.")
-        + " The official BIRD rule gives the same picture: "
+        + ("Both differences are significant after Holm correction" if sig
+           else "Not every difference survives Holm correction")
+        + f" (adjusted p ≤ {max(holm_p.values()):.1e}). The question-level bootstrap CI excludes zero "
+        f"{below_zero_clause({n: ci[n] for n in RUNS})}; resampling whole databases, it does so "
+        f"{below_zero_clause({n: cluster_ci[n] for n in RUNS})}."
+        + " Under the official BIRD rule: "
         f"{', '.join(f'{n} {ex_off[n]:.2f}' for n in NAMES)}.",
-        f"- **It is broad, not one bad database.** {', '.join(f'{n} drops on {n_db_down[n]}' for n in RUNS)} of "
-        f"{len(dbs)} databases; both adapters rise only on {', '.join(sorted(db_up)) or 'none'}. "
+        ("- **It is broad, not one bad database.** " if all(n_db_down[n] > len(dbs) / 2 for n in RUNS)
+         else "- **By database and difficulty.** ")
+        + f"{', '.join(f'{n} drops on {n_db_down[n]}' for n in RUNS)} of "
+        f"{len(dbs)} databases; the databases where both rise: {', '.join(sorted(db_up)) or 'none'}. "
         + (f"Every difficulty level drops; the largest drop is on {worst_level}."
            if all(level_delta[n][lv] < 0 for n in RUNS for lv in LEVELS)
            else f"Not every difficulty level drops; the largest drop is on {worst_level}."),
-        f"- **Mostly silent wrong answers, not crashes.** Of the questions lost against base, "
+        ("- **Mostly silent wrong answers, not crashes.** " if all(2 * silent[n] > len(lost[n]) for n in RUNS)
+         else "- **Lost questions: wrong results and crashes.** ")
+        + "Of the questions lost against base, "
         f"{', '.join(f'{pct(silent[n], len(lost[n])):.0f}% ({n})' for n in RUNS)} still execute and return a "
-        "wrong result. Overall execution errors rise only slightly "
-        f"({n_err['base']} → {', '.join(str(n_err[n]) for n in RUNS)}).",
+        f"wrong result. Execution errors overall: base {n_err['base']}, "
+        f"{', '.join(f'{n} {n_err[n]}' for n in RUNS)}.",
         f"- **The Spider style carries over.** Spider's gold-query spacing appears in "
         f"{', '.join(f'{share(SPIDER_SPACING, preds[n]):.0f}%' for n in RUNS)} of the adapters' predictions, against "
         f"{share(SPIDER_SPACING, preds['base']):.0f}% for base and {share(SPIDER_SPACING, golds):.0f}% of BIRD's "
@@ -258,19 +294,16 @@ def main():
         f"{fmt_range([share(STRFTIME, preds[n], year_hint) for n in RUNS], '{:.0f}')}% and copy in "
         f"{fmt_range([share(YEAR_FN, preds[n], year_hint) for n in RUNS], '{:.0f}')}%, which fails with "
         "`no such function: YEAR`.",
-        f"- **Not the cause:** `CAST` usage ({', '.join(f'{share(CAST, preds[n]):.0f}%' for n in NAMES)}) and "
-        f"`no such column` errors ({', '.join(str(err_counts[n]['no such column']) for n in NAMES)}) barely move.",
-        "- **From reading a random sample of 15 lost questions per adapter:**",
-        "  - Literal values are copied as the question writes them: `\"1995-9-4\"` for a stored `1995-09-04`, "
-        "`\"No.667467\"`, `\"female\"` for `'Female'`. This was a *gain* on Spider, whose gold copies literals.",
-        "  - Hint instructions are partly ignored: a requested `CASE`, a symmetric `OR`, a `SUM ... GROUP BY`.",
-        "  - The wrong join path or table is used on BIRD's larger schemas.",
-        "  - Output columns are pared down or swapped, Spider-style.",
+        f"- **For comparison:** `CAST` usage is {', '.join(f'{share(CAST, preds[n]):.0f}%' for n in NAMES)} and "
+        f"`no such column` errors number {', '.join(str(err_counts[n]['no such column']) for n in NAMES)} "
+        f"({', '.join(NAMES)}).",
+        *HAND_READ.get(decoding["repetition_penalty"], []),
         "- **Caveats.** One training seed per adapter. Qwen2.5-Coder (2024) may also have seen BIRD (2023), so the "
         "base is less likely contaminated, not certainly clean. Evidence was included (the standard BIRD setting).",
-        "",
     ]
-    OUT.write_text("\n".join(lines))
+    lines += ablation_section(NAMES, evals, results_dir / LEGACY_DIR, resamples)
+    lines.append("")
+    out.write_text("\n".join(lines))
     print("\n".join(lines))
 
 

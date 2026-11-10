@@ -9,11 +9,13 @@ absolute difference of 0.0; on the 4-bit path they are bit-identical (asserted w
 200-step training run matches `peft`'s loss at every step. With this implementation I fine-tuned
 Qwen2.5-Coder-7B-Instruct for text-to-SQL on one 8 GB laptop GPU (five adapter configurations,
 2.3–3.1 h each, peak memory ≤ 6.74 GB) and scored every model by executing its SQL. On Spider dev
-the best adapters gain about 2.5 points over the untuned model (74.95% → 77.56%), which is not
-significant after correcting for multiple comparisons. On BIRD dev, which the adapters never saw,
-the same adapters lose 4.2 and 4.8 points (45.96% → 41.79% and 41.13%, Holm-adjusted p ≤ 1e-4).
-Counting the predictions shows why: the adapters learned Spider's conventions, and on BIRD those
-conventions are wrong.
+the adapters gain 2.2 to 4.0 points over the untuned model (75.92% → 79.88% for the best), and two
+of the five gains stay significant after correcting for multiple comparisons. On BIRD dev, which
+the adapters never saw, the two adapters tested lose 3.8 and 4.5 points (46.68% → 42.89% and
+42.18%, Holm-adjusted p ≤ 5e-4). Counting the predictions shows why: the adapters learned Spider's
+conventions, and on BIRD those conventions are wrong. A first round of these evaluations silently
+inherited a repetition penalty of 1.1 from the model's generation config; removing it changed 40–66%
+of the predictions and one of the conclusions, and both rounds are reported (Section 7.5).
 
 ## 1. Introduction
 
@@ -35,8 +37,10 @@ The contributions are:
   execution-accuracy harness (read-only, time-limited, NULL-safe, held-out guard, provenance on
   every result) for Spider and BIRD (Sections 5–6).
 - A rank and target-module ablation on Spider, with paired tests (Section 7.1–7.2).
-- A measured negative transfer result: Spider fine-tuning lowers BIRD accuracy by 4–5 points, with
-  counted evidence of the mechanism (Sections 7.3–7.4).
+- A measured negative transfer result: Spider fine-tuning lowers BIRD accuracy by about 4 points,
+  with counted evidence of the mechanism (Sections 7.3–7.4).
+- A decoding ablation: the repetition penalty that `generate()` inherits from Qwen's generation
+  config, measured on all nine evaluations (Section 7.5).
 
 ## 2. Background
 
@@ -169,7 +173,12 @@ Source: `results/eval/summary.md` (from `results/train/<run>/`).
 ## 6. Evaluation harness
 
 **Generation.** Greedy decoding with the training prompt; up to 256 new tokens on Spider and 640
-on BIRD (its longest gold query is 541 tokens).
+on BIRD (its longest gold query is 541 tokens). The repetition penalty is set to 1.0 explicitly.
+Qwen's `generation_config.json` sets it to 1.1, and `generate()` applies that under greedy search
+unless told otherwise (Section 7.5). The evaluation config must name the value, the runner records
+it in every result file, and a test compares the runner's output with a hand-written argmax loop.
+Each result row also records whether generation stopped at the end-of-sequence token; 1 Spider
+prediction and 7 BIRD predictions, out of 10,806, ran into the token limit instead.
 
 **Execution.** Each prediction runs on a read-only SQLite connection (a generated `DROP TABLE`
 fails instead of damaging the database) with a 30-second wall-clock limit enforced through
@@ -191,7 +200,8 @@ summary scripts assert that each evaluated checkpoint is the one whose training 
 **Statistics.** All models answer the same questions, so comparisons are paired: an exact
 two-sided McNemar test on the questions where two models disagree, Holm correction across the
 comparisons with the base model, and a 95% paired bootstrap confidence interval (5,000 resamples)
-on the accuracy difference.
+on the accuracy difference. Questions that share a database are not independent, so the summaries
+also report a second interval that resamples whole databases (20 on Spider, 11 on BIRD).
 
 **BIRD.** Four adaptations were needed. BIRD lists composite primary keys as nested lists and uses
 type names (`integer`, `real`, `date`, `datetime`) that Spider does not; the schema renderer handles
@@ -205,130 +215,188 @@ duplicates, is reported alongside the strict score.
 
 ### 7.1 Spider dev
 
-| Model | Dev EX (%) | Δ vs base | 95% CI | Won / lost vs base | McNemar p (Holm) |
-|---|---|---|---|---|---|
-| Base | 74.95 | | | | |
-| `qv_r4` | 75.92 | +0.97 | [−1.26, +3.19] | +76 / −66 | 0.450 (0.900) |
-| `qv_r8` | 75.92 | +0.97 | [−1.35, +3.19] | +77 / −67 | 0.453 (0.900) |
-| `qv_r16` | 77.47 | +2.51 | [+0.19, +4.74] | +85 / −59 | 0.037 (0.164) |
-| `attn_r8` | 76.79 | +1.84 | [−0.39, +3.97] | +74 / −55 | 0.113 (0.338) |
-| `all7_r8` | 77.56 | +2.61 | [+0.29, +4.93] | +88 / −61 | 0.033 (0.164) |
+| Model | Dev EX (%) | Δ vs base | 95% CI | 95% CI, by database | Won / lost vs base | McNemar p (Holm) |
+|---|---|---|---|---|---|---|
+| Base | 75.92 | | | | | |
+| `qv_r4` | 78.14 | +2.22 | [+0.10, +4.35] | [−1.04, +5.69] | +74 / −51 | 0.049 (0.125) |
+| `qv_r8` | 79.11 | +3.19 | [+1.16, +5.32] | [−0.09, +6.76] | +79 / −46 | 0.004 (0.016) |
+| `qv_r16` | 79.88 | +3.97 | [+1.93, +6.09] | [+0.82, +7.56] | +84 / −43 | 3.5e-4 (0.002) |
+| `attn_r8` | 78.24 | +2.32 | [+0.19, +4.55] | [−0.88, +5.69] | +76 / −52 | 0.042 (0.125) |
+| `all7_r8` | 78.24 | +2.32 | [+0.10, +4.55] | [−1.90, +6.62] | +82 / −58 | 0.052 (0.125) |
 
 Source: `results/eval/summary.md`.
 
-Every adapter scores above the base, by 1 to 2.6 points. Two are nominally significant
-(p ≈ 0.035) and none survives Holm correction. Each adapter fixes 74–88 questions the base got
-wrong and breaks 55–67 it got right, so the net gain is a small difference between two large
-numbers. Allowing any column order raises every model by 2.3–3.2 points and the base the most
-(74.95 → 78.14), so the strict comparison, if anything, favours the adapters.
+Every adapter scores above the base, by 2.2 to 4.0 points. The gains of `qv_r16` and `qv_r8` stay
+significant after Holm correction; the other three sit at the edge of nominal significance and do
+not. Treating the 20 databases as the unit widens every interval, and only `qv_r16`'s then
+excludes zero. Each adapter fixes 74–84 questions the base got wrong and breaks 43–58 it got
+right, so the net gain is still a difference between two much larger numbers.
+
+Two checks on how much of this is the scoring rule:
+
+- *Column order.* Allowing any column order raises every model by 2.3–3.8 points and the base the
+  most (75.92 → 79.69). The adapters' lead shrinks to 0.9–2.9 points. Of the 74–84 questions an
+  adapter wins, 15–19 are ones where the base returned the right rows with its columns in a
+  different order from the gold query.
+- *Empty results.* 53 of the 1,034 gold queries return no rows or only NULLs, and any query whose
+  filter matches nothing is scored correct there. The models "match" 39–45 of them. On the other
+  981 questions the gains are +1.83 to +3.77 points.
 
 By Spider's official difficulty tiers (computed with Spider's own `eval_hardness`, which
 reproduces the official dev split of 248 / 446 / 174 / 166), the gain sits mostly on medium
-questions: every adapter nets +10 to +20 questions there and between −5 and +9 on the other three
-tiers combined. Easy questions are near the ceiling (base 90.3%).
+questions: every adapter nets +16 to +27 questions there and +2 to +14 on the other three tiers
+combined. Easy questions are near the ceiling (base 91.5%).
 
 ### 7.2 Ablations
 
-- *Rank on q/v.* r = 4 and r = 8 are tied (785 correct each; 22 won, 22 lost against each other).
-  r = 16 beats r = 8 on 24 questions against 8 (unadjusted p = 0.007).
-- *Target modules.* At r = 8, adding k/o (`attn_r8`) and the MLP (`all7_r8`) scores above q/v
-  alone (+35/−26 and +50/−33), but neither difference is significant (p = 0.31 and 0.08).
+- *Rank on q/v.* Accuracy rises with rank: 78.14, 79.11 and 79.88 for r = 4, 8 and 16. r = 16
+  beats r = 4 on 30 questions against 12 (unadjusted p = 0.008). Neither single step is significant
+  on its own (r = 8 against r = 4: +19/−9, p = 0.087; r = 16 against r = 8: +18/−10, p = 0.185).
+- *Target modules.* At r = 8, adding k/o (`attn_r8`) or k/o and the MLP (`all7_r8`) scores below
+  q/v alone (+18/−27 and +25/−34), though neither difference is significant (p = 0.23 and 0.30).
   `all7_r8` reaches by far the lowest training loss (0.065 against 0.080–0.090) with four times the
-  parameters of `qv_r16`, and the two tie on dev (40 won, 39 lost; p = 1.0).
+  parameters of `qv_r16`, and scores below it on dev (20 won, 37 lost; unadjusted p = 0.033).
 
 Lower training loss did not mean higher accuracy on Spider, and on BIRD (Section 7.3) both the
 lowest-loss adapter and the smaller one fall below the base.
 
 ### 7.3 BIRD dev, zero-shot
 
-The two best Spider adapters were scored on BIRD dev against the base model.
+Two adapters were scored on BIRD dev against the base model: `qv_r16`, the best on Spider, and
+`all7_r8`, the largest. (They were chosen as the two best under the first round of evaluations;
+see Section 7.5.)
 
-| Model | BIRD EX strict (%) | Δ vs base | 95% CI | Won / lost vs base | McNemar p (Holm) | BIRD EX official (%) |
-|---|---|---|---|---|---|---|
-| Base | 45.96 | | | | | 50.39 |
-| `qv_r16` | 41.13 | −4.82 | [−6.98, −2.74] | +99 / −173 | 8.5e-6 (1.7e-5) | 45.37 |
-| `all7_r8` | 41.79 | −4.17 | [−6.19, −2.02] | +101 / −165 | 1.0e-4 (1.0e-4) | 46.22 |
+| Model | BIRD EX strict (%) | Δ vs base | 95% CI | 95% CI, by database | Won / lost vs base | McNemar p (Holm) | BIRD EX official (%) |
+|---|---|---|---|---|---|---|---|
+| Base | 46.68 | | | | | | 51.37 |
+| `qv_r16` | 42.89 | −3.78 | [−5.93, −1.76] | [−7.92, +0.18] | +105 / −163 | 4.8e-4 (4.8e-4) | 48.24 |
+| `all7_r8` | 42.18 | −4.50 | [−6.52, −2.48] | [−7.20, −1.92] | +91 / −160 | 1.6e-5 (3.2e-5) | 47.33 |
 
 Source: `results/eval/bird/summary.md`.
 
 Both adapters are significantly *worse* than the model they started from, under either scoring
-rule. The drop is broad: it appears on all three BIRD difficulty levels (largest on challenging:
-−9.0 and −6.2 points) and on 9 and 8 of the 11 databases; both adapters improve only on
-`student_club` and `thrombosis_prediction`. The two adapters tie with each other again (+91/−81,
-p = 0.49).
+rule. The drop appears on all three BIRD difficulty levels (largest on challenging: −8.3 points
+for both). By database, `all7_r8` drops on 9 of 11 and `qv_r16` on 6, with 3 unchanged;
+`thrombosis_prediction` is the only database where both improve. With only 11 databases the
+by-database interval is wide: it stays below zero for `all7_r8` and just reaches zero for
+`qv_r16`. The two adapters do not differ from each other (+74/−85, p = 0.43).
 
 ![Figure 3](../results/spider_vs_bird.png)
 
 *Figure 3. Change in execution accuracy against the untuned base, with 95% paired bootstrap
-intervals. On Spider (left) every adapter is above the base and the intervals of the two best
-barely clear zero. On BIRD (right) both adapters evaluated there are well below the base, with
-intervals entirely below zero.*
+intervals (resampling questions). On Spider (left) every adapter is above the base. On BIRD
+(right) both adapters evaluated there are below the base, with intervals entirely below zero.*
 
 ### 7.4 What changed
 
-Most of the questions the adapters lose on BIRD (71% for `qv_r16`, 68% for `all7_r8`) are not
-crashes: the SQL runs and returns the wrong rows. Execution errors rise only from 189 to 208 and
-211. To see what changed, `scripts/summarize_bird.py` counts features of every prediction:
+Most of the questions the adapters lose on BIRD (75% for `qv_r16`, 72% for `all7_r8`) are not
+crashes: the SQL runs and returns the wrong rows. Execution errors barely move (177 for the base,
+178 and 189 for the adapters). To see what changed, `scripts/summarize_bird.py` counts features of
+every prediction:
 
 | Measure | BIRD gold | Base | `qv_r16` | `all7_r8` |
 |---|---|---|---|---|
-| Spider gold spacing (`a  =  b`, `x ,  y`), % | 0.0 | 0.6 | 74.1 | 77.2 |
-| String literal in double quotes, % | 0.0 | 0.2 | 51.1 | 54.4 |
-| Uses `YEAR(...)` when the hint itself writes `YEAR(` (n = 78), % | 0.0 | 5.1 | 28.2 | 28.2 |
-| Uses SQLite's `STRFTIME(...)` on those same 78, % | 87.2 | 85.9 | 50.0 | 44.9 |
-| Uses `CAST(...)`, % | 9.9 | 7.5 | 7.6 | 7.0 |
-| Execution errors: `no such column` | | 171 | 165 | 173 |
-| Execution errors: `no such function` | | 5 | 25 | 21 |
+| Spider gold spacing (`a  =  b`, `x ,  y`), % | 0.0 | 0.1 | 79.2 | 81.1 |
+| String literal in double quotes, % | 0.0 | 0.1 | 34.7 | 39.4 |
+| Uses `YEAR(...)` when the hint itself writes `YEAR(` (n = 78), % | 0.0 | 5.1 | 28.2 | 26.9 |
+| Uses SQLite's `STRFTIME(...)` on those same 78, % | 87.2 | 71.8 | 43.6 | 30.8 |
+| Uses `CAST(...)`, % | 9.9 | 7.2 | 7.4 | 6.8 |
+| Uses `DISTINCT`, % | 15.9 | 8.1 | 6.6 | 7.6 |
+| Execution errors: `no such column` | | 157 | 138 | 151 |
+| Execution errors: `no such function` | | 4 | 22 | 20 |
 
 Source: `results/eval/bird/summary.md`.
 
 **The Spider style is imprinted.** Spider's gold queries are written with doubled spaces around
-operators and double-quoted string values; three quarters of the adapters' BIRD predictions now
-look like that, against almost none of the base model's. The formatting is harmless by itself, but
-it shows how completely 536 steps on Spider reshaped the output.
+operators and often with double-quoted string values; four fifths of the adapters' BIRD
+predictions now have that spacing, against almost none of the base model's. The formatting is
+harmless by itself, but it shows how completely 536 steps on Spider reshaped the output.
 
 **Literals are copied as written.** Spider's gold queries tend to copy values exactly as the
-question words them, and in Section 7.1 this was one of the habits the adapters gained. BIRD's
-databases store values in their own formats. Examples from the result files:
+question words them. BIRD's databases store values in their own formats. Examples from the result
+files:
 
 - Question 1177 asks about a lab test "on 1995-9-4". The base writes `Date = '1995-09-04'`, the
   stored format. `qv_r16` writes `Date = "1995-9-4"` and matches nothing.
-- Question 1523 asks about "card owner of No.667467". The base writes `CardID = 667467`;
-  `qv_r16` writes `CardID = "No.667467"`.
-- Question 815 counts "good female superheroes". The base follows the hint's ids; `qv_r16` writes
-  `gender = "female" AND alignment = "good"`, but the stored values are capitalised.
+- Question 1377 asks how many students "have the position of president". The base writes
+  `position = 'President'`, as the hint spells it; `all7_r8` writes `position = "president"`.
+- Question 815 counts "good female superheroes". The base follows the hint's ids; both adapters
+  write `gender = "female"` and `alignment = "good"`, but the stored values are capitalised.
 
 **Hints are copied instead of translated.** BIRD's evidence is often written in pseudo-SQL, such as
 `YEAR(CreationDate) = 2011`. SQLite has no `YEAR` function. On the 78 questions whose hint does
-this, the base model translates it to `STRFTIME('%Y', ...)` 86% of the time, as the gold queries do,
-and copies `YEAR(` 5% of the time. The adapters translate only 45–50% of the time and copy 28% of
-the time, and those queries fail with `no such function: YEAR` (Question 662 is lost this way by
-both adapters).
+this, the base model translates it to `STRFTIME('%Y', ...)` 72% of the time, as the gold queries do,
+and copies `YEAR(` 5% of the time. The adapters translate only 31–44% of the time and copy 27–28%
+of the time, and those queries fail with `no such function: YEAR`. Question 553 is lost this way
+by both adapters: the hint says "YEAR (Date) = 2011", the base writes
+`STRFTIME('%Y', Date) = '2011'`, and the adapters write `YEAR (T1.Date) = 2011`.
 
-**What did not change.** `CAST` usage and `no such column` errors are flat, so the drop is not a
-general loss of SQL competence or a sudden inability to read the schema. A hand-read random sample
-of 15 lost questions per adapter adds two further patterns that are harder to count: hint
-instructions that are partly ignored (a requested `CASE`, a symmetric `OR` condition, a
-`SUM ... GROUP BY`), and output columns pared down or swapped in Spider's style.
+**What did not change.** `CAST` usage is flat, and `no such column` errors do not rise (157 for
+the base, 138 and 151 for the adapters), so the drop is not a general loss of SQL competence or a
+sudden inability to read the schema. A hand-read random sample of 15 lost questions per adapter
+adds patterns that are harder to count: a dropped `DISTINCT` or a pared-down column list where the
+base kept the full one, conditions the question never asked for (`status = "approved"`), and
+`ORDER BY ... LIMIT 1` rewritten as `= (SELECT MAX(...))`, which returns every tie.
+
+### 7.5 Decoding ablation: an inherited repetition penalty
+
+The first round of evaluations called `generate()` with `do_sample=False` and no other decoding
+argument. `transformers` fills unset arguments from the model's `generation_config.json`, and
+Qwen2.5's sets `repetition_penalty: 1.1`. The penalty is applied under greedy search too, and to
+every token already in the context, so the schema's own identifiers were penalised each time the
+model tried to write them. Training has no such penalty. I found this while reviewing the
+harness, fixed it, archived the first-round results unchanged under `results/eval/rp1.1/` and
+`results/eval/bird/rp1.1/`, and re-ran all nine evaluations. Everything above this section is the
+re-run. The comparison, on the same checkpoints and questions:
+
+| Model | Spider EX at 1.1 | at 1.0 | Δ | McNemar p | BIRD EX at 1.1 | at 1.0 | Δ | McNemar p |
+|---|---|---|---|---|---|---|---|---|
+| Base | 74.95 | 75.92 | +0.97 | 0.237 | 45.96 | 46.68 | +0.72 | 0.343 |
+| `qv_r4` | 75.92 | 78.14 | +2.22 | 0.003 | | | | |
+| `qv_r8` | 75.92 | 79.11 | +3.19 | 5.1e-5 | | | | |
+| `qv_r16` | 77.47 | 79.88 | +2.42 | 0.001 | 41.13 | 42.89 | +1.76 | 0.019 |
+| `attn_r8` | 76.79 | 78.24 | +1.45 | 0.072 | | | | |
+| `all7_r8` | 77.56 | 78.24 | +0.68 | 0.443 | 41.79 | 42.18 | +0.39 | 0.637 |
+
+Source: the "Decoding ablation" sections of `results/eval/summary.md` and
+`results/eval/bird/summary.md`. p-values are unadjusted.
+
+- *A small setting changed a lot of output.* 40–42% of the Spider predictions and 47–66% of the
+  BIRD predictions differ between the two settings.
+- *Removing the penalty raised every score, and the fine-tuned ones more.* All nine scores are
+  higher without it. On Spider the base gains 1.0 point and the three q/v
+  adapters 2.2–3.2. With the penalty the adapters made 32–41 `no such column` errors on Spider;
+  without it, 16–25. The base made 37 either way. A likely reason: a penalty on repeating prompt
+  tokens is a penalty on copying schema names.
+- *One conclusion changed.* With the penalty, the Spider gains were +1.0 to +2.6 points, none
+  survived Holm correction, and `all7_r8` looked like the best configuration. Without it they are
+  +2.2 to +4.0, two survive, and `qv_r16` leads. An earlier version of this write-up reported the
+  first reading.
+- *One conclusion did not.* The BIRD drop is −4.8 and −4.2 points with the penalty and −3.8 and
+  −4.5 without, significant after Holm correction both times, with the same counted mechanism.
+
+The general point is that `do_sample=False` does not mean "greedy" in `transformers`: other
+logits processors still come from the model's shipped config unless each is set explicitly.
 
 ## 8. Discussion
 
-**The two results are one result.** On Spider the adapters gain by adopting the benchmark's
-conventions: `INTERSECT` for "both X and Y", exact equality instead of `LIKE` patterns, literals
-copied as written, fewer unnecessary joins (from reading a sample of won and lost Spider
-questions). On BIRD the same conventions are wrong: literal formats differ, hints must be
-translated into SQLite, and schemas are larger. Fine-tuning on 8,577 Spider examples mostly
-taught the model how Spider's answer key is written.
+**The two results are one result.** On Spider the adapters gain partly by adopting the benchmark's
+conventions: its column order (15–19 of the 74–84 wins), `INTERSECT` for "both X and Y" (2.1% of
+the base's predictions, about 4% of the adapters' and of the gold's), literals copied as written.
+They also make half as many `no such column` errors as the base. On BIRD the conventions are
+wrong: literal formats differ, hints must be translated into SQLite, and schemas are larger.
+Fine-tuning on 8,577 Spider examples taught the model, in large part, how Spider's answer key is
+written.
 
-**The base model probably knew Spider already.** Untuned, Qwen2.5-Coder reproduces quirks of
-Spider's gold queries, such as `Country ,  COUNT(*)` with the doubled space. Spider has been public
-since 2018 and is very likely in the pretraining data. That leaves little real headroom on Spider
-and explains why the in-domain gain is small: much of the task was already learned, and what
-remained to learn was style.
+**The base model probably knew Spider already.** Untuned, Qwen2.5-Coder writes Spider's gold
+spacing, such as `Country ,  COUNT(*)` with the doubled space, in 31 of its 1,034 dev predictions.
+Spider has been public since 2018 and is very likely in the pretraining data. That limits the real
+headroom on Spider: much of the task was already learned.
 
 **Training loss is not the target.** The configuration with the lowest training loss
-(`all7_r8`, 0.065) ties a configuration with a quarter of its parameters on Spider, and on BIRD the
-two lose about the same amount (−4.2 and −4.8 points; head to head p = 0.49). More capacity fitted Spider more closely; it did not generalise better.
+(`all7_r8`, 0.065) scores below a configuration with a quarter of its parameters on Spider, and on
+BIRD the two lose about the same amount (−4.5 and −3.8 points; head to head p = 0.43). More
+capacity fitted Spider's training set more closely; it did not generalise better.
 
 **What would test this further** (not done here):
 
@@ -337,19 +405,26 @@ two lose about the same amount (−4.2 and −4.8 points; head to head p = 0.49)
 - *Mixing training data* from more than one benchmark, or regularising toward the base model,
   would test whether the convention imprint can be avoided rather than only measured.
 - *Seed repeats* would bound the training noise on the Spider ablation gaps. They are unlikely to
-  change the BIRD conclusion: a 4–5 point drop with p < 0.001 is far larger than the 1–2 point gaps
-  between Spider configurations.
+  change the BIRD conclusion: a drop of about 4 points with p < 0.001 is larger than the gaps of
+  2 points or less between Spider configurations.
 
 ## 9. Limitations
 
 - One seed per configuration: differences between Spider configurations include unmeasured
   seed variance.
 - One model: all results are for Qwen2.5-Coder-7B-Instruct with one prompt format.
+- Questions cluster in databases (20 on Spider dev, 11 on BIRD dev). The McNemar tests treat them
+  as independent. The by-database intervals in Sections 7.1 and 7.3 are the more cautious reading:
+  under them one Spider gain and one BIRD drop exclude zero.
 - Execution on the released databases only. Spider's test-suite metric runs each query on several
   database variants; these Spider numbers are therefore not directly comparable with published
-  test-suite results. The BIRD official-rule column is computed with BIRD's own comparison.
+  test-suite results. 53 of the 1,034 Spider gold queries return an empty result, the case those
+  variants exist to catch (Section 7.1). The BIRD official-rule column is computed with BIRD's own
+  comparison.
 - Strict comparison. The harness compares columns by position. Allowing any column order
-  raises Spider scores by 2.3–3.2 points without changing the conclusions.
+  raises Spider scores by 2.3–3.8 points and narrows the adapters' lead to 0.9–2.9 points.
+- The BIRD adapters were picked under the first round of evaluations. `qv_r8`, second on Spider
+  in the re-run, was not scored on BIRD.
 - BIRD may not be clean. BIRD (2023) predates Qwen2.5-Coder (2024), so it is less likely than
   Spider to be in the pretraining data, not certainly absent.
 - One training database is excluded. The 82 `baseball_1` examples exceed the 2,048-token limit
@@ -358,12 +433,12 @@ two lose about the same amount (−4.2 and −4.8 points; head to head p = 0.49)
 ## 10. Reproducibility
 
 Everything needed to regenerate the numbers above is in the repository. Per-question results are
-committed (`results/eval/*.jsonl`, `results/eval/bird/*.jsonl`); the summary tables and Figure 3
-are generated from them on CPU.
+committed (`results/eval/*.jsonl`, `results/eval/bird/*.jsonl`, and the first-round results under
+`rp1.1/` in each); the summary tables and Figure 3 are generated from them on CPU.
 
 ```bash
 pip install -r requirements.txt
-pytest -v                                      # 106 tests; parity and runner tests need a GPU
+pytest -v                                      # 109 tests; those needing a GPU or the data skip without it
 python -m lora_sql.train --config configs/train/qv_r8.yaml
 bash scripts/eval_chain.sh base qv_r8 qv_r4 qv_r16 attn_r8 all7_r8
 bash scripts/eval_chain.sh --config configs/eval/coder7b_bird_dev.yaml --out-dir results/eval/bird \
@@ -373,8 +448,11 @@ python scripts/summarize_bird.py               # -> results/eval/bird/summary.md
 python scripts/plot_results.py                 # -> results/spider_vs_bird.png
 ```
 
-The Spider evaluations ran at commit `c1b3174` and the BIRD evaluations at `5d959f0`; each result
-file records its commit and the adapter sidecar. On the RTX 4060 Laptop GPU, a training run takes
+All nine evaluations ran at commit `afee865`; each result file records its commit, its decoding
+settings and the adapter sidecar. (The commit is stamped `+dirty` because the summary scripts were
+being edited and the result files written; the evaluation code was unchanged.) The first-round
+results under `rp1.1/` ran at `c1b3174` (Spider) and `5d959f0` (BIRD). To reproduce them, set
+`eval.repetition_penalty: 1.1`. On the RTX 4060 Laptop GPU, a training run takes
 2.3–3.1 h, a Spider dev evaluation 20–28 min, and a BIRD dev evaluation about an hour.
 
 ## References
@@ -407,7 +485,7 @@ file records its commit and the adapter sidecar. On the RTX 4060 Laptop GPU, a t
 | Gradient checkpointing | on |
 | Seed | 0 (shared data order across runs) |
 | Training data | Spider `train_spider` + `train_others`: 8,659 loaded, 8,577 used |
-| Decoding | greedy; 256 new tokens (Spider), 640 (BIRD) |
+| Decoding | greedy, repetition penalty 1.0; 256 new tokens (Spider), 640 (BIRD) |
 | Query time limit | 30 s for predictions; 300 s for BIRD gold queries |
 
 Source: `configs/train/*.yaml`, `configs/eval/*.yaml`, `results/train/*/data_report.json`.
