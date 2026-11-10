@@ -8,9 +8,9 @@ A from-scratch LoRA implementation validated numerically against HuggingFace `pe
 text-to-SQL fine-tuning on Spider with an execution-based eval harness. The package is `lora_sql`,
 laid out as a `src/` package and installed editable into `.venv`.
 
-**Status: Session 11 COMPLETE (on `dev`): qv_r8 scored on BIRD (43.35, −3.32 vs base), so three
-adapters are now on BIRD and all three are below base. Session 10 is merged to `main` (PR #4):
-every eval re-scored with true greedy decoding.** The
+**Status: Session 11 COMPLETE and merged to `main` (PR #5): qv_r8 scored on BIRD (43.35, −3.32 vs
+base), so three adapters are on BIRD and all three are below base. Session 10 (PR #4): every eval
+re-scored with true greedy decoding.** The
 Session 6 / 8 results had Qwen's default `repetition_penalty` 1.1 silently applied (`generate()`
 inherits it from `generation_config.json` even with `do_sample=False`). They are archived,
 unchanged, in `results/eval/rp1.1/` and `results/eval/bird/rp1.1/`. **The current numbers are the
@@ -54,8 +54,8 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
     bootstrap CI + a column-order robustness check). Regenerate it rather than hand-editing.
 - **v1 packaging done:** public root `README.md`, MIT `LICENSE`, the planning log renamed to
   `docs/PROJECT_LOG.md`, and `requirements.txt` made portable (`-e .`, cu121 wheel index).
-- **Everything through Session 10 is merged to `main`** (PR #1 v1, PR #2 Session 7, PR #3 Sessions
-  8–9, PR #4 Session 10, merge commit ee50b92). Work continues on `dev`.
+- **Everything through Session 11 is merged to `main`** (PR #1 v1, PR #2 Session 7, PR #3 Sessions
+  8–9, PR #4 Session 10, PR #5 Session 11, merge commit 32c29d3). Work continues on `dev`.
 - **Session 8: BIRD-dev zero-shot done; re-scored in Session 10; qv_r8 added in Session 11**
   (evidence in the prompt; base + qv_r8 + qv_r16 + all7_r8, about 1 h each).
   - Strict EX (true greedy): base 46.68, qv_r8 43.35 (−3.32), qv_r16 42.89 (−3.78), all7_r8 42.18
@@ -108,9 +108,10 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
   - `plot_results.py` labels whichever runs have a BIRD result.
   - The hand-read "DISTINCT is dropped" claim was replaced by a count: among lost questions an
     adapter omits a base DISTINCT in 9–13 and adds one in 2–9.
-  - Not yet merged to `main` or pushed.
-- Next (the user's pick): the adapter-scaling probe (α/2 on Spider + BIRD, no retraining), seed
-  repeats, CI + ruff (deferred in Session 10), or write-up polish (PDF / blog version).
+  - Merged to `main` in PR #5 (32c29d3).
+- Next (the user's pick, Session 12): the adapter-scaling probe (qv_r16 at 0.5× and 0.25× on
+  Spider + BIRD, no retraining). After that: seed repeats, CI + ruff (deferred in Session 10),
+  or write-up polish (PDF / blog version).
 - **Docs to keep current with every status-changing chunk:** `README.md` (public front page:
   results table, reproduce steps), `docs/PROJECT_LOG.md` (private planning log / knowledge base,
   CURRENT STATE block at the top), this file, and `docs/MinLoRA-SQL_explained.md`

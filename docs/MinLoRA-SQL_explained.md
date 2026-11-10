@@ -790,8 +790,7 @@ questions:
 
 ## 13. What happens next
 
-Status: everything through Session 10 (the decoding fix and the re-score) is on `main`
-(PRs #1–#4). Session 11 (`qv_r8` on BIRD) is on `dev`. Candidate next steps, roughly in order of value:
+Status: everything through Session 11 (`qv_r8` on BIRD) is on `main` (PRs #1–#5). Candidate next steps, roughly in order of value:
 
 1. **v1 to `main` (done).** The repo has a public front page (`README.md` at the root) and an MIT
    `LICENSE`. The planning log was renamed to `docs/PROJECT_LOG.md`. `dev` was merged into `main`
