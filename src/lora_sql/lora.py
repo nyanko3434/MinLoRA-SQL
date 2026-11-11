@@ -99,6 +99,22 @@ def inject_lora(
     return model
 
 
+def set_lora_scale(model: nn.Module, factor: float) -> int:
+    """Run every adapter at `factor` times its trained strength: scaling = alpha / r * factor.
+
+    An inference-time probe (eval --lora-scale), never used in training. It is absolute, not
+    cumulative, so factor=1.0 restores the trained scaling. `alpha` is left alone: the adapter is
+    still the one its sidecar describes. Returns the number of adapters set."""
+    if not (math.isfinite(factor) and factor > 0):
+        raise ValueError(f"lora scale factor must be a finite number > 0, got {factor!r}")
+    layers = [m for m in model.modules() if isinstance(m, LoRALinear)]
+    if not layers:
+        raise ValueError("set_lora_scale found no LoRALinear modules; the model has no adapters to scale")
+    for m in layers:
+        m.scaling = m.alpha / m.r * factor
+    return len(layers)
+
+
 def lora_param_stats(model: nn.Module) -> dict:
     """Aggregate parameter/layer counts for reporting adapter size and trainability."""
     total = 0

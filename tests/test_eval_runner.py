@@ -7,6 +7,7 @@ import gc
 import json
 from pathlib import Path
 
+import pytest
 import torch
 import torch.nn as nn
 from conftest import requires_gpu, requires_spider
@@ -55,6 +56,16 @@ def test_load_model_for_eval_uses_load_lora(fresh_model, batch, tmp_path):
     _free(model, reference)
 
 
+def test_load_model_for_eval_lora_scale(fresh_model, tmp_path):
+    ckpt = _checkpoint(fresh_model, tmp_path)
+    model, _ = load_model_for_eval(_smoke_cfg(), str(ckpt), lora_scale=0.5)
+    layers = [m for m in model.modules() if isinstance(m, LoRALinear)]
+    assert len(layers) == 48 and all(m.scaling == 1.0 and m.alpha == 16 for m in layers)  # trained 16 / 8 = 2.0
+    _free(model)
+    with pytest.raises(ValueError, match="needs a lora_checkpoint"):
+        load_model_for_eval(_smoke_cfg(), lora_scale=0.5)
+
+
 def test_load_model_for_eval_base_injects_nothing():
     model, _ = load_model_for_eval(_smoke_cfg())
     assert not any(isinstance(m, LoRALinear) for m in model.modules())
@@ -71,6 +82,7 @@ def test_run_eval_smoke(tmp_path):
     assert len(report["results"]) == 3
     assert report["meta"]["limit"] == 3 and report["meta"]["lora_checkpoint"] is None
     assert report["meta"]["decoding"] == {"do_sample": False, "repetition_penalty": 1.0}
+    assert report["meta"]["lora_scale"] == 1.0
     rows = [json.loads(l) for l in out.with_suffix(".jsonl").read_text().splitlines()]
     assert len(rows) == 3 and all("exec_error" in r for r in rows)
     assert all(r["n_new_tokens"] > 0 and isinstance(r["truncated"], bool) for r in rows)

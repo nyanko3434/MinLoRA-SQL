@@ -3,10 +3,13 @@
 Usage:
     python -m lora_sql.eval.runner --config configs/eval/coder7b_spider_dev.yaml \
         [--lora-checkpoint runs/qv_r8/final] [--out results/eval/qv_r8.json] [--limit N]
+        [--lora-scale 0.5]
 
 Without --lora-checkpoint the plain base model is evaluated (no adapters injected). With it, the
 checkpoint dir is loaded through checkpoint.load_lora, which injects from the sidecar and asserts
-every key mapped on. --limit is for smoke tests only.
+every key mapped on. --limit is for smoke tests only. --lora-scale runs the loaded adapter at a
+fraction of its trained strength (the scaling probe); such results are a diagnostic and are kept
+out of the main results directories.
 """
 
 import argparse
@@ -23,6 +26,7 @@ from lora_sql.config import ModelConfig
 from lora_sql.data import Example, encode_prompt, load_bird_examples, load_examples
 from lora_sql.eval.execute import DEFAULT_TIMEOUT_S, ExecutionError, execute_and_compare, order_matters, run_query
 from lora_sql.eval.metrics import EvalResult, compute_metrics, eval_difficulties
+from lora_sql.lora import set_lora_scale
 from lora_sql.qlora import load_model
 
 
@@ -96,7 +100,9 @@ def gold_preflight(examples: list[Example], db_dir: Path, timeout: float = DEFAU
     return gold_rows
 
 
-def load_model_for_eval(cfg: dict, lora_checkpoint: str | None = None):
+def load_model_for_eval(cfg: dict, lora_checkpoint: str | None = None, lora_scale: float | None = None):
+    if lora_scale is not None and not lora_checkpoint:
+        raise ValueError("lora_scale needs a lora_checkpoint: the base model has no adapter to scale")
     m = cfg["model"]
     if m["quant"] == "nf4" and m["dtype"] != "bfloat16":
         raise ValueError(f"model.quant=nf4 computes in bfloat16; model.dtype must be bfloat16, got {m['dtype']!r}")
@@ -110,6 +116,8 @@ def load_model_for_eval(cfg: dict, lora_checkpoint: str | None = None):
                                    gradient_checkpointing=False))
     if lora_checkpoint:
         load_lora(model, lora_checkpoint)
+        if lora_scale is not None:
+            set_lora_scale(model, lora_scale)
     model.eval()
     return model, tokenizer
 
@@ -139,7 +147,7 @@ def generate_sql(model, tokenizer, example: Example, max_new_tokens: int, device
 
 
 def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = None,
-             limit: int | None = None) -> dict:
+             limit: int | None = None, lora_scale: float | None = None) -> dict:
     check_held_out(cfg)
     decoding = decoding_config(cfg)
     examples = load_eval_examples(cfg)
@@ -156,7 +164,7 @@ def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = No
     gold_rows = gold_preflight(examples, db_dir, cfg["data"].get("gold_timeout_s", DEFAULT_TIMEOUT_S))
     print(f"gold preflight: {len(examples)} gold queries executed ok", flush=True)
 
-    model, tokenizer = load_model_for_eval(cfg, lora_checkpoint)
+    model, tokenizer = load_model_for_eval(cfg, lora_checkpoint, lora_scale)
 
     output_path = Path(out or cfg["eval"]["results_path"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +208,8 @@ def run_eval(cfg: dict, lora_checkpoint: str | None = None, out: str | None = No
         "model": cfg["model"],
         "lora_checkpoint": lora_checkpoint,
         "checkpoint_sidecar": sidecar,
+        # Fraction of the trained alpha / r the adapter ran at. 1.0 is the adapter as trained.
+        "lora_scale": 1.0 if lora_scale is None else lora_scale,
         "eval_path": cfg["data"]["eval_path"],
         "data": cfg["data"],  # format, db_dir, use_evidence, gold_timeout_s, ...
         "limit": limit,
@@ -221,9 +231,11 @@ def main() -> None:
                         help="LoRA checkpoint dir (adapter.safetensors + lora_config.json); omit for the base model")
     parser.add_argument("--out", default=None, help="Results JSON path (overrides eval.results_path)")
     parser.add_argument("--limit", type=int, default=None, help="Evaluate only the first N examples (smoke tests)")
+    parser.add_argument("--lora-scale", type=float, default=None,
+                        help="Run the adapter at this fraction of its trained scaling (needs --lora-checkpoint)")
     args = parser.parse_args()
     cfg = load_config(args.config)
-    summary = run_eval(cfg, args.lora_checkpoint, out=args.out, limit=args.limit)
+    summary = run_eval(cfg, args.lora_checkpoint, out=args.out, limit=args.limit, lora_scale=args.lora_scale)
     print(json.dumps(summary, indent=2))
 
 

@@ -29,9 +29,9 @@ from itertools import combinations
 from pathlib import Path
 
 import yaml
-from summary_common import (DQ_LITERAL, GREEDY, JOIN, LEGACY_DIR, SPIDER_SPACING, ablation_section, decoding_label,
-                            below_zero_clause, error_kind, fmt_p, fmt_range, is_empty_result, share, shared_decoding,
-                            truncated_cell)
+from summary_common import (DQ_LITERAL, GREEDY, JOIN, LEGACY_DIR, SPIDER_SPACING, STRFTIME, YEAR_FN, ablation_section,
+                            below_zero_clause, decoding_label, error_kind, fmt_p, fmt_range, is_empty_result, share,
+                            shared_decoding, truncated_cell)
 from summary_common import load_eval as load_results
 
 from lora_sql.data import bird_question
@@ -46,10 +46,8 @@ LEVELS = ["simple", "moderate", "challenging"]
 RESULTS = Path("results/eval/bird")
 N_BOOT = 5000
 
-YEAR_FN = re.compile(r"\bYEAR\s*\(", re.I)                          # MySQL-style; SQLite has no YEAR()
 CAST = re.compile(r"\bCAST\s*\(", re.I)
 DISTINCT = re.compile(r"\bDISTINCT\b", re.I)
-STRFTIME = re.compile(r"\bSTRFTIME\s*\(", re.I)                    # SQLite's way to take a year
 
 # Notes from reading predictions by hand. They describe one set of predictions, so they are keyed
 # by the repetition penalty those predictions were decoded with and printed only for that set.

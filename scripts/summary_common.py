@@ -18,12 +18,17 @@ LEGACY_DIR = "rp1.1"
 SPIDER_SPACING = re.compile(r"\S {2}(?:=|>=|<=|!=|<|>) {2}\S| ,  ")  # Spider gold's `a  =  b`, `x ,  y`
 DQ_LITERAL = re.compile(r"(?:=|!=|<>|\bLIKE)\s*\"", re.I)            # string literal in double quotes
 JOIN = re.compile(r"\bJOIN\b", re.I)
+YEAR_FN = re.compile(r"\bYEAR\s*\(", re.I)                          # MySQL-style; SQLite has no YEAR()
+STRFTIME = re.compile(r"\bSTRFTIME\s*\(", re.I)                    # SQLite's way to take a year
 
 
-def load_eval(directory: Path, name: str):
-    """(report, per-question rows) for one model, refusing --limit smoke runs."""
+def load_eval(directory: Path, name: str, lora_scale: float = 1.0):
+    """(report, per-question rows) for one model, refusing --limit smoke runs and any result whose
+    adapter ran at another strength than `lora_scale` (results from before the key count as 1.0)."""
     report = json.loads((directory / f"{name}.json").read_text())
     assert report["meta"]["limit"] is None, f"{directory / name} was a --limit smoke run"
+    got = report["meta"].get("lora_scale", 1.0)
+    assert got == lora_scale, f"{directory / name} ran the adapter at scale {got}, expected {lora_scale}"
     rows = [json.loads(l) for l in (directory / f"{name}.jsonl").read_text().splitlines()]
     assert len(rows) == len(report["results"]) == report["summary"]["total"]
     return report, rows

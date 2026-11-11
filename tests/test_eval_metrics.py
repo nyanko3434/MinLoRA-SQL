@@ -50,7 +50,7 @@ def test_run_eval_threads_difficulty(tmp_path, monkeypatch):
     cfg = runner.load_config(ROOT / "configs" / "week1_parity.yaml")
     for key in ("eval_path", "db_dir"):
         cfg["data"][key] = str(ROOT / cfg["data"][key])
-    monkeypatch.setattr(runner, "load_model_for_eval", lambda cfg, ckpt=None: (SimpleNamespace(device="cpu"), None))
+    monkeypatch.setattr(runner, "load_model_for_eval", lambda cfg, ckpt=None, lora_scale=None: (SimpleNamespace(device="cpu"), None))
     monkeypatch.setattr(runner, "generate_sql",
                         lambda model, tok, example, max_new, device, penalty: (example.query, 7, False))
 
@@ -90,7 +90,7 @@ def test_run_eval_bird_format(tmp_path, monkeypatch):
     for key in ("eval_path", "tables_path", "db_dir"):
         cfg["data"][key] = str(ROOT / cfg["data"][key])
     seen = []
-    monkeypatch.setattr(runner, "load_model_for_eval", lambda cfg, ckpt=None: (SimpleNamespace(device="cpu"), None))
+    monkeypatch.setattr(runner, "load_model_for_eval", lambda cfg, ckpt=None, lora_scale=None: (SimpleNamespace(device="cpu"), None))
     monkeypatch.setattr(runner, "generate_sql",
                         lambda model, tok, example, max_new, device, penalty:
                         seen.append(example) or (example.query, 7, False))
