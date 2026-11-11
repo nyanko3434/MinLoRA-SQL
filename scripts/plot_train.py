@@ -2,6 +2,7 @@
 results/ (runs/ is gitignored; adapter weights stay there). Run from repo root:
 
     python scripts/plot_train.py --runs qv_r8 qv_r4 qv_r16 attn_r8 all7_r8
+    python scripts/plot_train.py --runs qv_r16 qv_r16_s1 qv_r16_s2 --out results/train_loss_seeds.png
 
 Writes results/train_loss.png and results/train/<run>/{log.jsonl, data_report.json,
 lora_config.json}. The logged loss is ONE window's token-weighted loss every log_every steps, so
@@ -15,13 +16,16 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 # Color follows the run, never its position in --runs (fixed categorical slots, validated
-# reference palette order: blue, orange, aqua, yellow, magenta).
+# reference palette order: blue, orange, aqua, yellow, magenta, green, violet). The last two are
+# the seed repeats of qv_r16; plot them with --out so results/train_loss.png keeps the five configs.
 RUN_COLORS = {
     "qv_r8": "#2a78d6",
     "qv_r4": "#eb6834",
     "qv_r16": "#1baf7a",
     "attn_r8": "#eda100",
     "all7_r8": "#e87ba4",
+    "qv_r16_s1": "#008300",
+    "qv_r16_s2": "#6250d6",
 }
 SURFACE, INK, INK_2, MUTED, GRID, AXIS = "#fcfcfb", "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
 WINDOW = 5  # logged points (= 50 steps at log_every 10)
