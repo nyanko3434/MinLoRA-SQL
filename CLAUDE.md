@@ -8,7 +8,9 @@ A from-scratch LoRA implementation validated numerically against HuggingFace `pe
 text-to-SQL fine-tuning on Spider with an execution-based eval harness. The package is `lora_sql`,
 laid out as a `src/` package and installed editable into `.venv`.
 
-**Status: Session 13 COMPLETE and merged to `main` (PR #7): seed repeats of qv_r16. Seeds 0 / 1 / 2 score
+**Status: Session 14 COMPLETE on `dev` (not merged): the close-out. ruff (lint only), a CPU-only
+GitHub Actions job, and README / WRITEUP tightened with no number changes. The experiments are
+finished; anything further is optional. Session 13 (merged, PR #7): seed repeats of qv_r16. Seeds 0 / 1 / 2 score
 79.88 / 78.63 / 78.72 on Spider dev (all above base 75.92) and 42.89 / 42.70 / 42.31 on BIRD dev
 (all below base 46.68). Both effects replicate in direction; seed 0, the reported run, is the
 highest of the three on Spider, and the ranking of configurations is not established. Session 12
@@ -97,7 +99,7 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
   - Tests skip (not fail) without a GPU, the Spider data or the Coder tokenizer cache
     (`conftest.requires_gpu` / `requires_spider`). `pytest` is pinned in `requirements.txt`.
   - Merged to `main` in PR #4 (ee50b92).
-- **Session 9: write-up done.** `docs/WRITEUP.md` is a ~4,000-word Markdown mini-paper that leads
+- **Session 9: write-up done.** `docs/WRITEUP.md` is a Markdown mini-paper (about 7,300 words by Session 14) that leads
   with parity, as the project log requires.
   - Every number in it comes from a committed artifact, and each table cites its source.
   - **When results change, update WRITEUP.md's tables too**, along with README.md and the
@@ -166,10 +168,32 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
     qv_r16_s2 --out results/train_loss_seeds.png`. Regenerate them rather than hand-editing.
   - Coincidence, not a bug: seed 1 and the 0.5× scaling run both score 78.63 on Spider with
     +20 / −33 against seed 0. They are different predictions (625 of 1,034 share the SQL text).
-- Next (the user's pick, Session 14): the close-out. ruff (lint only), a CPU-only GitHub Actions
-  job, and a tightening pass over README and WRITEUP with no number changes. After that the
-  project is complete. Optional future work: seed repeats of a second configuration (qv_r8,
-  about 7 h), a 0.75× point or all7_r8 on the scaling probe, a PDF / blog version.
+- **Session 14: close-out (on `dev`, not merged).** No experiments, no number changes.
+  - **Lint:** `ruff check .` (config in `pyproject.toml`: E, F, W, I, B at line length 120; lint
+    only, never `ruff format`). Ignored with reasons: B905, E731, E741 globally; E501 for
+    `src/lora_sql/data.py` (the prompt template stays on one line) and the summary scripts
+    (Markdown rows as f-strings). The lint fixes touched nothing under `src/`.
+  - **CI:** `.github/workflows/ci.yml` runs on pushes to `main` / `dev` and on pull requests:
+    install `requirements-ci.txt`, the packaging gate, `ruff check .`, `pytest -q -rs`, then
+    regenerate the scaling and seed summaries and fail on any diff. It sets
+    `CUDA_VISIBLE_DEVICES=""` and `HF_HUB_OFFLINE=1`, so on the runner 58 tests pass and 63 skip
+    (no GPU, no datasets, no tokenizer cache). Rehearsed in a clean clone with a fresh CPU venv;
+    the first run on GitHub happens when `dev` is pushed.
+  - **`requirements-ci.txt` is `requirements.txt` minus the CUDA wheels** (`nvidia-*`, `triton`),
+    with `torch==2.5.1+cpu`. `tests/test_requirements.py` enforces that every other pin is
+    identical. **When a dependency is added or bumped, change both files.**
+  - `scripts/summarize_scaling.py` and `scripts/summarize_seeds.py` read only committed files
+    (results, configs, `results/train/`). Keep them free of `data/` and `runs/`, or the CI
+    regeneration step breaks. `summarize_eval.py` and `summarize_bird.py` need `data/` and stay
+    local.
+  - README went from 5,101 to about 3,800 words (the per-tier table and the long seed / scaling /
+    decoding bullet lists now live only in WRITEUP and the generated summaries). WRITEUP went
+    from 7,550 to about 7,300: §7.2 frames the ablation as five runs from the start, and §7.6–§8
+    lost their repetition. Sections 2–6 and 7.3–7.5 were left alone.
+- **The project is complete.** Optional future work, none of it needed for the result to stand:
+  seed repeats of a second configuration (qv_r8, about 7 h), a 0.75× point or all7_r8 on the
+  scaling probe, a PDF / blog version of the write-up, column-order-invariant scoring as the
+  default.
 - **Docs to keep current with every status-changing chunk:** `README.md` (public front page:
   results table, reproduce steps), `docs/PROJECT_LOG.md` (private planning log / knowledge base,
   CURRENT STATE block at the top), this file, and `docs/MinLoRA-SQL_explained.md`
@@ -181,9 +205,10 @@ Session 5 Half 2 added `src/lora_sql/checkpoint.py` (`save_lora` / `load_lora`,
     "Accuracy by difficulty" section into summary.md.
   - Result: the gain sits mostly in medium (net +10 to +20 questions per run). Extra churns
     23–27% with near-zero net change. Easy is near ceiling (base 90.3%).
-**`pytest -v` -> 120 passing** (16 injection + 8 parity + 11 data + 10 4-bit + 18 config + 4 qlora
-+ 6 checkpoint + 6 train + 20 eval_execute (CPU) + 16 eval_metrics (CPU) + 5 eval_runner (GPU)).
-With `CUDA_VISIBLE_DEVICES=""` it is 74 passed + 46 skipped. Tests that need the GPU, the Spider
+**`pytest -v` -> 121 passing** (16 injection + 8 parity + 11 data + 10 4-bit + 18 config + 4 qlora
++ 6 checkpoint + 6 train + 20 eval_execute (CPU) + 16 eval_metrics (CPU) + 5 eval_runner (GPU)
++ 1 requirements). With `CUDA_VISIBLE_DEVICES=""` it is 75 passed + 46 skipped; on the CI runner,
+which also lacks the datasets and the tokenizer cache, 58 passed + 63 skipped. Tests that need the GPU, the Spider
 data, BIRD (`data/bird/dev_20240627/`) or the Coder tokenizer skip when it is missing.
 
 **Eval configs** (plain YAML dicts read by `eval/runner.py`). Keys: `model.{name_or_path, quant,
@@ -211,7 +236,8 @@ paths. BIRD is zero-shot only, and never a training file.
 `src/lora_sql/eval/` (runner.py, execute.py, metrics.py), `configs/train/` (qv_r8 reference, qv_r4,
 qv_r16, attn_r8, all7_r8, and the seed repeats qv_r16_s1, qv_r16_s2), `configs/week1_parity.yaml`, `configs/eval/coder7b_spider_dev.yaml`,
 `configs/eval/coder7b_bird_dev.yaml`, all
-test files, `pyproject.toml`, and the `scripts/` files (`check_env.py`, `check_spider_database.py`,
+test files, `pyproject.toml` (packaging, pytest and ruff config), `requirements-ci.txt`,
+`.github/workflows/ci.yml`, and the `scripts/` files (`check_env.py`, `check_spider_database.py`,
 `toy_train.py`, `plot_toy.py`, `probe_memory.py`, `train_chain.sh`, `plot_train.py`,
 `eval_chain.sh`, `summarize_eval.py`, `summarize_bird.py`, `summary_common.py`, `plot_results.py`,
 `summarize_scaling.py`, `plot_scaling.py`, `summarize_seeds.py`, `plot_seeds.py`), `docs/WRITEUP.md`, and `licenses/spider-LICENSE` (Apache-2.0, for the vendored
@@ -346,16 +372,19 @@ python scripts/summarize_seeds.py && python scripts/plot_seeds.py
 HF_HUB_OFFLINE=1 python scripts/probe_memory.py --config configs/train/qv_r8.yaml --seq-lens 512 1024 1536 2048 2560
 
 # Tests: pytest is in requirements.txt and configured in pyproject.toml
-# (testpaths = ["tests"]). 120 passing as of Session 13 (incl. 20 eval_execute + 16 eval_metrics CPU,
+# (testpaths = ["tests"]). 121 passing as of Session 14 (incl. 20 eval_execute + 16 eval_metrics CPU,
 # 5 eval_runner GPU).
 pytest -v
+ruff check .   # lint (also run by CI)
 # CPU-only subset: safe while training holds the GPU
 CUDA_VISIBLE_DEVICES="" pytest -v tests/test_eval_metrics.py tests/test_eval_execute.py tests/test_config.py tests/test_data.py
 pytest -v tests/test_lora_parity.py   # just the parity suite
 pytest -v -s tests/test_lora_4bit.py  # 4-bit unit + QLoRA parity vs peft; -s prints max abs diffs
 ```
 
-There is no lint/format tooling configured in this repo yet.
+Lint: `ruff check .` (lint only; do not run `ruff format`, and never "fix" the vendored
+`eval_hardness` code in `eval/metrics.py`). CI runs the same lint, the CPU tests and a
+regeneration check of the two data-free summaries; see the Session 14 bullet.
 
 ## Data
 
