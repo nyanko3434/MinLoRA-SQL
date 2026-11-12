@@ -1,8 +1,8 @@
 """Session 1 environment check. Fails loudly on anything that would bite later."""
+import bitsandbytes as bnb
+import peft
 import torch
 import transformers
-import peft
-import bitsandbytes as bnb
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"

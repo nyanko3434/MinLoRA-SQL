@@ -12,3 +12,22 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+    "B905",  # zip() without strict=: the zipped lists are asserted equal-length where they are loaded
+    "E731",  # small lambdas bound to a name are used as local helpers in the summary scripts
+    "E741",  # `l` as a loop variable for lines / log rows
+]
+
+[tool.ruff.lint.per-file-ignores]
+# SYSTEM_PROMPT is part of the prompt contract and stays on one line, untouched.
+"src/lora_sql/data.py" = ["E501"]
+# The summary scripts hold Markdown table rows and sentences as f-strings; those stay on one line.
+"scripts/summarize_*.py" = ["E501"]
+"scripts/summary_common.py" = ["E501"]

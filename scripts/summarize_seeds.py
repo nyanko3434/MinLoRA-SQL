@@ -20,8 +20,20 @@ from collections import Counter
 from itertools import combinations
 from pathlib import Path
 
-from summary_common import (DQ_LITERAL, SPIDER_SPACING, STRFTIME, YEAR_FN, decoding_label, error_kind, fmt_p,
-                            fmt_range, load_eval, share, shared_decoding, truncated_cell)
+from summary_common import (
+    DQ_LITERAL,
+    SPIDER_SPACING,
+    STRFTIME,
+    YEAR_FN,
+    decoding_label,
+    error_kind,
+    fmt_p,
+    fmt_range,
+    load_eval,
+    share,
+    shared_decoding,
+    truncated_cell,
+)
 
 from lora_sql.config import load_config
 from lora_sql.eval.metrics import bootstrap_ci, cluster_bootstrap_ci, mcnemar_p

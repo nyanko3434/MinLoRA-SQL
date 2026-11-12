@@ -69,7 +69,8 @@ def main():
             d, c_lo, c_hi = data[n]
             strong = n in labelled
             alpha = 1.0 if strong else 0.45
-            ax.plot([c_lo, c_hi], [y, y], color=RUN_COLORS[n], linewidth=2, alpha=alpha, solid_capstyle="round", zorder=2)
+            ax.plot([c_lo, c_hi], [y, y], color=RUN_COLORS[n], linewidth=2, alpha=alpha, solid_capstyle="round",
+                    zorder=2)
             ax.plot(d, y, "o", markersize=8, color=RUN_COLORS[n], alpha=alpha,
                     markeredgecolor=SURFACE, markeredgewidth=2, zorder=3)
             if strong:

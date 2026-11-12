@@ -29,14 +29,36 @@ from itertools import combinations
 from pathlib import Path
 
 import yaml
-from summary_common import (DQ_LITERAL, GREEDY, JOIN, LEGACY_DIR, SPIDER_SPACING, STRFTIME, YEAR_FN, ablation_section,
-                            below_zero_clause, decoding_label, error_kind, fmt_p, fmt_range, is_empty_result, share,
-                            shared_decoding, truncated_cell)
+from summary_common import (
+    DQ_LITERAL,
+    GREEDY,
+    JOIN,
+    LEGACY_DIR,
+    SPIDER_SPACING,
+    STRFTIME,
+    YEAR_FN,
+    ablation_section,
+    below_zero_clause,
+    decoding_label,
+    error_kind,
+    fmt_p,
+    fmt_range,
+    is_empty_result,
+    share,
+    shared_decoding,
+    truncated_cell,
+)
 from summary_common import load_eval as load_results
 
 from lora_sql.data import bird_question
-from lora_sql.eval.execute import (DEFAULT_TIMEOUT_S, ExecutionError, bird_set_match, order_matters,
-                                   results_match, run_query)
+from lora_sql.eval.execute import (
+    DEFAULT_TIMEOUT_S,
+    ExecutionError,
+    bird_set_match,
+    order_matters,
+    results_match,
+    run_query,
+)
 from lora_sql.eval.metrics import bootstrap_ci, cluster_bootstrap_ci, holm, mcnemar_p
 
 CONFIG = Path("configs/eval/coder7b_bird_dev.yaml")

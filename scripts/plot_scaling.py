@@ -36,7 +36,8 @@ def main():
         ax.plot(xs, ys, color=color, linewidth=2, zorder=2, label=f"{bench} ({BENCHMARKS[bench]['kind']})")
         for s in scales:
             lo, hi = eff[s]["ci"]
-            ax.plot([s + dodge, s + dodge], [lo, hi], color=color, linewidth=2, alpha=0.45, solid_capstyle="round", zorder=2)
+            ax.plot([s + dodge, s + dodge], [lo, hi], color=color, linewidth=2, alpha=0.45, solid_capstyle="round",
+                    zorder=2)
         ax.plot(xs[1:], ys[1:], "o", markersize=8, color=color, markeredgecolor=SURFACE, markeredgewidth=2, zorder=3)
         for s in scales:
             d = eff[s]["delta"]
@@ -66,7 +67,8 @@ def main():
                        handlelength=1.6, columnspacing=1.8, borderaxespad=0.2)
     for text in legend.get_texts():
         text.set_color(INK_2)
-    fig.text(0.012, 0.012, "Vertical bars: 95% paired bootstrap CI (resampling questions). Diagnostic, not a tuned result.",
+    fig.text(0.012, 0.012,
+             "Vertical bars: 95% paired bootstrap CI (resampling questions). Diagnostic, not a tuned result.",
              color=INK_2, fontsize=8, ha="left", va="bottom")
 
     fig.tight_layout(rect=(0, 0.04, 1, 1))

@@ -87,7 +87,8 @@ def test_scaling():
 def test_set_lora_scale_interpolates_between_base_and_full():
     torch.manual_seed(0)
     # alpha / r = 1.5: not a power of two, so a wrong multiplication order would show.
-    model = nn.Sequential(LoRALinear(nn.Linear(6, 5), r=8, alpha=12), nn.Tanh(), LoRALinear(nn.Linear(5, 3), r=8, alpha=12))
+    model = nn.Sequential(LoRALinear(nn.Linear(6, 5), r=8, alpha=12), nn.Tanh(),
+                          LoRALinear(nn.Linear(5, 3), r=8, alpha=12))
     for m in model:
         if isinstance(m, LoRALinear):
             nn.init.normal_(m.lora_B, std=0.5)  # zero-init B would make every scale equal the base
