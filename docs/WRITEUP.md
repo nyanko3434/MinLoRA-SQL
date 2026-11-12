@@ -15,9 +15,13 @@ the adapters never saw, the three adapters tested lose 3.3 to 4.5 points (46.68%
 Holm-adjusted p ≤ 0.002). Counting the predictions shows why: the adapters learned Spider's
 conventions, and on BIRD those conventions are wrong. Run at half its trained strength, with
 no retraining, the best adapter keeps 68% of its Spider gain and shows 26% of its BIRD loss
-(Section 7.6). A first round of these evaluations silently
-inherited a repetition penalty of 1.1 from the model's generation config; removing it changed 40–66%
-of the predictions and one of the conclusions, and both rounds are reported (Section 7.5).
+(Section 7.6). Trained again with two more seeds, that adapter is above the base on Spider and
+below it on BIRD every time, but the reported run is the highest of the three on Spider, and
+every other configuration lies within half a point of the range the three seeds span
+(Section 7.7). A first
+round of these evaluations silently inherited a repetition penalty of 1.1 from the model's
+generation config; removing it changed 40–66% of the predictions and one of the conclusions, and
+both rounds are reported (Section 7.5).
 
 ## 1. Introduction
 
@@ -45,6 +49,8 @@ The contributions are:
   config, measured on all nine evaluations (Section 7.5).
 - A scaling probe: the best adapter run at a half and a quarter of its trained strength on both
   benchmarks, to see how the gain and the loss trade off (Section 7.6).
+- Seed repeats of the best configuration, scored on both benchmarks, to set the gain, the loss
+  and the gaps between configurations beside seed-to-seed variation (Section 7.7).
 
 ## 2. Background
 
@@ -158,7 +164,8 @@ so each update equals that of a true batch of 16.
 decay to 0, weight decay 0, gradient clipping 1.0, LoRA dropout 0.05, `alpha = 2r`, one epoch =
 536 optimizer steps, seed 0. NF4 with double quantisation, bf16 compute, gradient checkpointing.
 All five configurations use identical data settings and data order (a test enforces this) and
-differ only in LoRA rank and targets.
+differ only in LoRA rank and targets. Section 7.7 adds two further runs of `qv_r16` that differ
+from it only in the seed (1 and 2).
 
 | Run | Targets | Rank | LoRA params | Train time | Peak reserved memory | Loss (mean of last 10 logged) |
 |---|---|---|---|---|---|---|
@@ -233,7 +240,7 @@ Source: `results/eval/summary.md`.
 Every adapter scores above the base, by 2.2 to 4.0 points. The gains of `qv_r16` and `qv_r8` stay
 significant after Holm correction; the other three sit at the edge of nominal significance and do
 not. Treating the 20 databases as the unit widens every interval, and only `qv_r16`'s then
-excludes zero. Each adapter fixes 74–84 questions the base got wrong and breaks 43–58 it got
+excludes zero (for this seed; Section 7.7 repeats it with two more). Each adapter fixes 74–84 questions the base got wrong and breaks 43–58 it got
 right, so the net gain is still a difference between two much larger numbers.
 
 Two checks on how much of this is the scoring rule:
@@ -263,6 +270,12 @@ combined. Easy questions are near the ceiling (base 91.5%).
 
 Lower training loss did not mean higher accuracy on Spider, and on BIRD (Section 7.3) both the
 lowest-loss adapter and the smaller one fall below the base.
+
+These comparisons use one training run per configuration. Section 7.7 trains `qv_r16` twice more:
+the two new runs score 78.63 and 78.72, between `qv_r4` and `qv_r8`, and the three seeds span
+1.26 points. Every other configuration lies inside that range or less than half a point below
+it, so the list above describes these five runs; it does not establish an ordering of the
+configurations.
 
 ### 7.3 BIRD dev, zero-shot
 
@@ -439,6 +452,71 @@ and one training seed, with two scales fixed in advance. Resampling whole databa
 half-scale intervals include zero on both benchmarks, so "keeps the Spider gain while losing
 nothing on BIRD" is not established at that level.
 
+### 7.7 Seed repeats
+
+Everything above comes from one training run per configuration, with seed 0. To see how far a
+number moves when only the seed changes, I trained `qv_r16` twice more
+(`configs/train/qv_r16_s1.yaml`, `qv_r16_s2.yaml`; a test checks that they differ from
+`qv_r16.yaml` in the seed, the run name and the output directory only) and scored each run on
+both benchmarks. In this training loop the seed sets the LoRA `A` initialisation, the dropout
+masks and the order of the training data, so a repeat varies all three at once. The rules were
+fixed before the runs: seed 0 stays the reported `qv_r16`, all three seeds are reported, and none
+is picked as a result.
+
+| `qv_r16` seed | Spider EX (%) | Δ vs base | 95% CI | By database | BIRD EX (%) | Δ vs base | 95% CI | By database |
+|---|---|---|---|---|---|---|---|---|
+| Base | 75.92 | | | | 46.68 | | | |
+| 0 (reported) | 79.88 | +3.97 | [+1.93, +6.09] | [+0.82, +7.56] | 42.89 | −3.78 | [−5.93, −1.76] | [−7.92, +0.18] |
+| 1 | 78.63 | +2.71 | [+0.68, +4.84] | [−0.44, +5.89] | 42.70 | −3.98 | [−6.06, −2.02] | [−7.49, −0.28] |
+| 2 | 78.72 | +2.80 | [+0.77, +4.93] | [−0.28, +5.93] | 42.31 | −4.37 | [−6.45, −2.35] | [−8.31, −0.58] |
+| Mean of the three | 79.08 | +3.16 | [+1.29, +5.16] | [+0.12, +6.35] | 42.63 | −4.04 | [−5.91, −2.19] | [−7.87, −0.29] |
+
+Source: `results/eval/seeds/summary.md`, generated by `scripts/summarize_seeds.py`. The last row
+averages the three seeds' correctness per question; its intervals resample questions (or
+databases) with the seeds held fixed, so they do not cover seeds that were not run.
+
+![Figure 5](../results/seed_spread.png)
+
+*Figure 5. Change in execution accuracy against the untuned base for the three seeds of `qv_r16`
+(green) and the other configurations, one seed each (grey), with 95% paired bootstrap intervals
+(resampling questions). The shaded band is the range of the three seeds.*
+
+- *Both effects replicate in direction.* All three seeds are above the base on Spider (+2.71 to
+  +3.97) and below it on BIRD (−3.78 to −4.37), and every question-level interval excludes zero
+  (McNemar p ≤ 0.013 on Spider and ≤ 4.8e-4 on BIRD, unadjusted). By database, the Spider
+  interval excludes zero for seed 0 only and the BIRD interval for seeds 1 and 2 only.
+- *The reported Spider number is the high one.* Seed 0 is 1.16 to 1.26 points above the other
+  two (+19 / −31 and +20 / −33 questions; p = 0.119 and 0.098, unadjusted), and the mean gain
+  over the three is +3.16. The claim in Section 7.1 that `qv_r16`'s by-database interval excludes
+  zero holds for seed 0 and not for the other two.
+- *The BIRD loss moves less.* The seeds span 0.59 points on BIRD against 1.26 on Spider, and no
+  pair of seeds differs there (p = 0.47 to 0.86).
+- *The other configurations sit in or next to the seed range.* On Spider, `qv_r8` (79.11) lies
+  within the range of the three `qv_r16` seeds, and `qv_r4`, `attn_r8` and `all7_r8`
+  (78.14–78.24) are 0.39 to 0.48 points below the lowest seed, less than the 1.26 the seeds
+  differ by among themselves. On BIRD, `qv_r8` is 0.46 above the seed range and `all7_r8` 0.13
+  below it. The other configurations have one seed each, so this sets their gaps beside
+  `qv_r16`'s own spread and nothing more.
+- *Seeds disagree question by question about as much as configurations do.* Two seeds differ in
+  correctness on 4.8–5.5% of the Spider questions and 8.1–8.9% of the BIRD questions; seed 0 and
+  another configuration differ on 2.7–5.5% and 6.3–10.4%. Two seeds write the same SQL text for
+  73–74% of the Spider questions and 43–47% of the BIRD questions. Of the 99 Spider questions
+  that some seed gains over the base, 58 are gained by all three; of the 69 that some seed loses,
+  30 are lost by all three. On BIRD, 59 of 143 gained questions and 106 of 220 lost ones are
+  common to all three.
+- *The style counts replicate.* On BIRD, Spider's double-spaced formatting is in 79.2–80.6% of
+  each seed's predictions and double-quoted literals in 30.9–34.7%, and the hints' `YEAR(...)` is
+  copied in 28.2–38.5% of the 78 cases (base 5.1%).
+- *The training-loss column does not compare across seeds.* The mean of the last ten logged
+  windows is 0.084, 0.064 and 0.067 for seeds 0, 1 and 2. Each logged value is one accumulation
+  window, and a different data order puts different examples in the last ones. The five
+  configurations of Section 5 share one data order, so that table compares like with like; a
+  different seed does not.
+
+By coincidence seed 1 has the same Spider score (78.63) and the same won / lost counts against
+seed 0 (+20 / −33) as the half-scale run of Section 7.6. They are different predictions: the
+two agree in correctness on 984 of the 1,034 questions and in SQL text on 625.
+
 ## 8. Discussion
 
 **The two results are one result.** On Spider the adapters gain partly by adopting the benchmark's
@@ -455,10 +533,23 @@ Spider has been public since 2018 and is very likely in the pretraining data. Th
 headroom on Spider: much of the task was already learned.
 
 **Training loss is not the target.** The configuration with the lowest training loss
-(`all7_r8`, 0.065) scores below a configuration with a quarter of its parameters on Spider. On
-BIRD it has the largest drop of the three (−4.5 points, against −3.8 and −3.3 for the QV
-adapters), though the three do not differ significantly (pairwise p = 0.22 to 0.54). More
-capacity fitted Spider's training set more closely; it did not generalise better.
+(`all7_r8`, 0.065) does not score above the smaller ones on Spider: it is level with `attn_r8`,
+below `qv_r8`, and 0.39 to 1.64 points below the three seeds of `qv_r16`, which has a quarter of
+its parameters. On BIRD it has the largest drop of the three (−4.5 points, against −3.8 and −3.3
+for the QV adapters), though the three do not differ significantly (pairwise p = 0.22 to 0.54)
+and it is 0.13 points below the `qv_r16` seed range. More capacity fitted Spider's training set
+more closely; nothing here shows that it generalised better.
+
+**What the seed repeats change.** Section 7.7 leaves the main result where it was and takes away
+a smaller one. The Spider gain and the BIRD loss both appear for every seed, so neither is an
+accident of one run; the BIRD loss is the steadier of the two (a range of 0.59 points against
+1.26). What does not hold up is the ordering of the configurations. The reported `qv_r16` is the
+highest of its three seeds, the other two land between `qv_r4` and `qv_r8`, and every other
+configuration is closer to the nearest `qv_r16` seed than the seeds are to each other. "Accuracy
+rises with rank" and "`qv_r16` is the best configuration" are therefore statements about five
+particular runs. The statistics of Sections 7.1–7.3 were never built to catch this: a paired
+test over questions measures how sure one can be that two given checkpoints differ, not that two
+training recipes do.
 
 **The trade-off is continuous, and uneven.** Section 7.6 turns one adapter down at inference.
 Both effects shrink, and the BIRD loss shrinks faster: at half scale 68% of the Spider gain is
@@ -468,7 +559,10 @@ show instead is that the adapter's habits switch on at different strengths: the 
 formatting first, the `YEAR(` copying that breaks queries last. It suggests, for one adapter and
 one seed, that a weaker adapter (a lower `alpha`, or fewer training steps) might sit at a better
 point on this trade-off. The probe does not show that: the scale would have to be chosen on data
-other than the two dev sets it is then reported on.
+other than the two dev sets it is then reported on. Set beside Section 7.7, the half-scale
+change on Spider (−1.26 points against the adapter as trained) is the size of the difference
+between two seeds, while the change on BIRD (+2.80) is several times the BIRD seed range of
+0.59. The probe was run on seed 0 only.
 
 **What would test this further** (not done here):
 
@@ -477,18 +571,22 @@ other than the two dev sets it is then reported on.
   repeating it on `all7_r8` would show whether the shape is specific to `qv_r16`.
 - *Mixing training data* from more than one benchmark, or regularising toward the base model,
   would test whether the convention imprint can be avoided rather than only measured.
-- *Seed repeats* would bound the training noise on the Spider ablation gaps. They are unlikely to
-  change the BIRD conclusion: drops of 3.3 to 4.5 points with adjusted p ≤ 0.002 are larger than
-  the gaps of 2 points or less between Spider configurations.
+- *Seed repeats of the other configurations.* Section 7.7 repeats `qv_r16` only. Ranking the
+  configurations would need several seeds of each, at about 3.7 GPU-hours per seed with both
+  evaluations, and gaps of half a point may still be out of reach on 1,034 questions.
 
 ## 9. Limitations
 
-- One seed per configuration: differences between Spider configurations include unmeasured
-  seed variance.
+- Mostly one seed. Only `qv_r16` was trained more than once (three seeds, Section 7.7). The
+  other four configurations have one seed each, and each lies within half a point of the range
+  `qv_r16`'s seeds span (1.26 points wide on Spider, 0.59 on BIRD). Three seeds give a rough
+  spread, not a variance estimate, and a seed here changes initialisation, dropout and data
+  order together.
 - One model: all results are for Qwen2.5-Coder-7B-Instruct with one prompt format.
 - Questions cluster in databases (20 on Spider dev, 11 on BIRD dev). The McNemar tests treat them
   as independent. The by-database intervals in Sections 7.1 and 7.3 are the more cautious reading:
-  under them one Spider gain and one BIRD drop exclude zero.
+  under them one Spider gain and one BIRD drop exclude zero, and across the three seeds of
+  `qv_r16` that Spider gain excludes zero for one seed and the BIRD drop for two.
 - Execution on the released databases only. Spider's test-suite metric runs each query on several
   database variants; these Spider numbers are therefore not directly comparable with published
   test-suite results. 53 of the 1,034 Spider gold queries return an empty result, the case those
@@ -496,8 +594,8 @@ other than the two dev sets it is then reported on.
   comparison.
 - Strict comparison. The harness compares columns by position. Allowing any column order
   raises Spider scores by 2.3–3.8 points and narrows the adapters' lead to 0.9–2.9 points.
-- The scaling probe (Section 7.6) covers one adapter at two scales, and is read off the same dev
-  sets as everything else. No scale is a tuned result.
+- The scaling probe (Section 7.6) covers one adapter (seed 0) at two scales, and is read off the
+  same dev sets as everything else. No scale is a tuned result.
 - The decoding ablation on BIRD covers the base, `qv_r16` and `all7_r8`. `qv_r8` was scored on
   BIRD only after the fix, so it has no penalty-1.1 counterpart there.
 - BIRD may not be clean. BIRD (2023) predates Qwen2.5-Coder (2024), so it is less likely than
@@ -509,12 +607,12 @@ other than the two dev sets it is then reported on.
 
 Everything needed to regenerate the numbers above is in the repository. Per-question results are
 committed (`results/eval/*.jsonl`, `results/eval/bird/*.jsonl`, and the first-round results under
-`rp1.1/` in each, and the scaling probe under `scaling/` in each); the summary tables and
-Figures 3 and 4 are generated from them on CPU.
+`rp1.1/` in each, the scaling probe under `scaling/` in each, and the seed repeats under
+`seeds/` in each); the summary tables and Figures 3, 4 and 5 are generated from them on CPU.
 
 ```bash
 pip install -r requirements.txt
-pytest -v                                      # 116 tests; those needing a GPU or the data skip without it
+pytest -v                                      # 120 tests; those needing a GPU or the data skip without it
 python -m lora_sql.train --config configs/train/qv_r8.yaml
 bash scripts/eval_chain.sh base qv_r8 qv_r4 qv_r16 attn_r8 all7_r8
 bash scripts/eval_chain.sh --config configs/eval/coder7b_bird_dev.yaml --out-dir results/eval/bird \
@@ -529,13 +627,23 @@ for S in 0.5 0.25; do                          # the scaling probe (Section 7.6)
 done
 python scripts/summarize_scaling.py            # -> results/eval/scaling/summary.md
 python scripts/plot_scaling.py                 # -> results/scaling_curve.png
+for S in qv_r16_s1 qv_r16_s2; do               # the seed repeats (Section 7.7)
+  bash scripts/train_chain.sh $S
+  bash scripts/eval_chain.sh --out-dir results/eval/seeds $S
+  bash scripts/eval_chain.sh --config configs/eval/coder7b_bird_dev.yaml \
+      --out-dir results/eval/bird/seeds $S
+done
+python scripts/plot_train.py --runs qv_r16 qv_r16_s1 qv_r16_s2 --out results/train_loss_seeds.png
+python scripts/summarize_seeds.py              # -> results/eval/seeds/summary.md
+python scripts/plot_seeds.py                   # -> results/seed_spread.png
 ```
 
 The nine evaluations of the re-run ran at commit `afee865`, the `qv_r8` BIRD evaluation, added
-afterwards, at `e6aa099`, and the four scaling-probe evaluations at `9978965`. Each result file
-records its commit, its decoding settings, the adapter sidecar and the adapter scale. (The commit
-is stamped `+dirty` because the summary scripts were
-being edited and the result files written; the evaluation code was unchanged.) The first-round
+afterwards, at `e6aa099`, the four scaling-probe evaluations at `9978965`, and the two seed
+repeats (training and all four evaluations) at `7dca200`. Each result file records its commit,
+its decoding settings, the adapter sidecar and the adapter scale. (The commit is stamped `+dirty`
+because the summary scripts were being edited or the result files written, which are untracked
+until committed; the training and evaluation code was unchanged.) The first-round
 results under `rp1.1/` ran at `c1b3174` (Spider) and `5d959f0` (BIRD). To reproduce them, set
 `eval.repetition_penalty: 1.1`. On the RTX 4060 Laptop GPU, a training run takes
 2.3–3.1 h, a Spider dev evaluation 20–28 min, and a BIRD dev evaluation about an hour.
@@ -568,7 +676,7 @@ results under `rp1.1/` ran at `c1b3174` (Spider) and `5d959f0` (BIRD). To reprod
 | Epochs / steps | 1 / 536 |
 | Max sequence length | 2,048 tokens |
 | Gradient checkpointing | on |
-| Seed | 0 (shared data order across runs) |
+| Seed | 0 (shared data order across the five runs); 1 and 2 for the seed repeats of `qv_r16` |
 | Training data | Spider `train_spider` + `train_others`: 8,659 loaded, 8,577 used |
 | Decoding | greedy, repetition penalty 1.0; 256 new tokens (Spider), 640 (BIRD) |
 | Query time limit | 30 s for predictions; 300 s for BIRD gold queries |

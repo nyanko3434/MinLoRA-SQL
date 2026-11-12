@@ -1,0 +1,14 @@
+{
+  "n_loaded": 8659,
+  "max_seq_len": 2048,
+  "n_dropped": 82,
+  "dropped_by_db_id": {
+    "baseball_1": 82
+  },
+  "n_kept": 8577,
+  "limit_examples": null,
+  "n_used": 8577,
+  "n_discarded_tail_per_epoch": 1,
+  "total_steps": 536,
+  "data_order_sha256": "6b62694988bf7b2782bae2494712eb86360a9bec7161a10a665aa03c6015e7e0"
+}

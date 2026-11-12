@@ -229,13 +229,26 @@ def reading(results: dict) -> list[str]:
     for name, r in (("Spider", sp), ("BIRD", bd)):
         exs = [r["vs_base"][s]["ex"] for s in r["seeds"]]
         lo, hi = min(exs), max(exs)
+        first = exs[0]  # seed 0, the run in the main tables
+        place = "the highest" if first == hi else "the lowest" if first == lo else "neither the highest nor the lowest"
         inside = [f"{o} ({v['ex']:.2f})" for o, v in r["other"].items() if lo <= v["ex"] <= hi]
-        outside = [f"{o} ({v['ex']:.2f})" for o, v in r["other"].items() if not lo <= v["ex"] <= hi]
+        gaps = {o: v["ex"] - (hi if v["ex"] > hi else lo) for o, v in r["other"].items() if not lo <= v["ex"] <= hi}
+        outside = [f"{o} ({r['other'][o]['ex']:.2f}, {abs(g):.2f} {'above' if g > 0 else 'below'} the nearest seed)"
+                   for o, g in gaps.items()]
+        beyond = [o for o, g in gaps.items() if abs(g) > hi - lo]
+        if not gaps:
+            verdict = ""
+        elif beyond:
+            verdict = (f" Further from the nearest seed than the seeds are from each other: {', '.join(beyond)} "
+                       f"({len(beyond)} of {len(gaps)}).")
+        else:
+            verdict = " None of them is further from the nearest seed than the seeds are from each other."
         lines.append(
             f"- **{name}, seed spread against configuration gaps:** the {RUN} seeds span {hi - lo:.2f} points "
-            f"({lo:.2f} to {hi:.2f}). Inside that range: {', '.join(inside) or 'no other configuration'}. Outside it: "
-            f"{', '.join(outside) or 'none'}. The other configurations have one seed each, so this compares their "
-            f"gap with {RUN}'s own spread and nothing more.")
+            f"({lo:.2f} to {hi:.2f}); seed 0, the run in the main tables, is {place} of the {n_seeds}. Inside that "
+            f"range: {', '.join(inside) or 'no other configuration'}. Outside it: {', '.join(outside) or 'none'}."
+            f"{verdict} The other configurations have one seed each, so this compares their gap with {RUN}'s own "
+            "spread and nothing more.")
         pair_p = [e["p"] for e in r["seed_pairs"].values()]
         seed_diff = [e["differs"] for e in r["seed_pairs"].values()]
         cfg_diff = [v["vs_seed0"]["differs"] for v in r["other"].values()]
