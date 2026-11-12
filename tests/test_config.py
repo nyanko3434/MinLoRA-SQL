@@ -15,6 +15,9 @@ CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs" / "train"
 REFERENCE = "qv_r8"
 ALL_CONFIGS = ["qv_r8", "qv_r4", "qv_r16", "attn_r8", "all7_r8"]
 ABLATIONS = [n for n in ALL_CONFIGS if n != REFERENCE]
+# Seed repeats: name -> (the config it repeats, its seed). They are not ablations: nothing but
+# the seed changes.
+SEED_REPEATS = {"qv_r16_s1": ("qv_r16", 1), "qv_r16_s2": ("qv_r16", 2)}
 
 
 def _flatten(d: dict, prefix: str = "") -> dict:
@@ -32,7 +35,7 @@ def _reference_dict() -> dict:
         return yaml.safe_load(f)
 
 
-@pytest.mark.parametrize("name", ALL_CONFIGS)
+@pytest.mark.parametrize("name", [*ALL_CONFIGS, *SEED_REPEATS])
 def test_config_parses(name):
     cfg = load_config(CONFIG_DIR / f"{name}.yaml")
     assert cfg.run_name == name
@@ -49,6 +52,20 @@ def test_ablation_differs_only_in_lora_and_names(name):
     allowed = {"run_name", "train.out_dir"} | {k for k in flat if k.startswith("lora.")}
     assert differing <= allowed, f"unexpected differences: {sorted(differing - allowed)}"
     assert cfg.lora.alpha == 2 * cfg.lora.rank
+    assert cfg.train.out_dir == f"runs/{cfg.run_name}"
+
+
+@pytest.mark.parametrize("name", SEED_REPEATS)
+def test_seed_repeat_differs_only_in_seed_and_names(name):
+    parent, seed = SEED_REPEATS[name]
+    ref = _flatten(asdict(load_config(CONFIG_DIR / f"{parent}.yaml")))
+    cfg = load_config(CONFIG_DIR / f"{name}.yaml")
+    flat = _flatten(asdict(cfg))
+
+    assert flat.keys() == ref.keys()
+    differing = {k for k in flat if flat[k] != ref[k]}
+    assert differing == {"seed", "run_name", "train.out_dir"}, f"differs in {sorted(differing)}"
+    assert cfg.seed == seed != ref["seed"]
     assert cfg.train.out_dir == f"runs/{cfg.run_name}"
 
 
