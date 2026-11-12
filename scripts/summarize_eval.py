@@ -30,13 +30,27 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from summary_common import (DQ_LITERAL, GREEDY, JOIN, LEGACY_DIR, SPIDER_SPACING, ablation_section, decoding_label,
-                            below_zero_clause, error_kind, fmt_p, fmt_range, is_empty_result, load_eval, share,
-                            shared_decoding, truncated_cell)
+from summary_common import (
+    DQ_LITERAL,
+    GREEDY,
+    JOIN,
+    LEGACY_DIR,
+    SPIDER_SPACING,
+    ablation_section,
+    below_zero_clause,
+    decoding_label,
+    error_kind,
+    fmt_p,
+    fmt_range,
+    is_empty_result,
+    load_eval,
+    share,
+    shared_decoding,
+    truncated_cell,
+)
 
 from lora_sql.eval.execute import ExecutionError, order_matters, results_match, run_query
-from lora_sql.eval.metrics import (DIFFICULTIES, bootstrap_ci, cluster_bootstrap_ci, eval_difficulties, holm,
-                                   mcnemar_p)
+from lora_sql.eval.metrics import DIFFICULTIES, bootstrap_ci, cluster_bootstrap_ci, eval_difficulties, holm, mcnemar_p
 
 RUNS = ["qv_r8", "qv_r4", "qv_r16", "attn_r8", "all7_r8"]
 NAMES = ["base", *RUNS]

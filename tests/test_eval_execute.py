@@ -9,8 +9,14 @@ import pytest
 
 from lora_sql.data import Example
 from lora_sql.eval import execute
-from lora_sql.eval.execute import (ExecutionError, bird_set_match, execute_and_compare, order_matters, results_match,
-                                   run_query)
+from lora_sql.eval.execute import (
+    ExecutionError,
+    bird_set_match,
+    execute_and_compare,
+    order_matters,
+    results_match,
+    run_query,
+)
 from lora_sql.eval.runner import check_held_out, decoding_config, gold_preflight, load_config
 
 ROOT = Path(__file__).resolve().parents[1]

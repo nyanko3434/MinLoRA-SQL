@@ -1,4 +1,5 @@
-import json, sqlite3
+import json
+import sqlite3
 
 dev = json.load(open("data/spider_data/dev.json"))
 print("dev examples:", len(dev))
