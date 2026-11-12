@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu:
+    name: Lint and CPU tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # No GPU, no datasets and no model downloads on the runner: the tests that need them skip.
+      CUDA_VISIBLE_DEVICES: ""
+      HF_HUB_OFFLINE: "1"
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - name: Install (CPU-only wheels)
+        run: pip install -r requirements-ci.txt
+      - name: Packaging gate
+        run: python -c "import lora_sql; print('ok')"
+      - name: Lint
+        run: ruff check .
+      - name: Tests
+        run: pytest -q -rs
+      - name: Summaries regenerate from the committed results
+        run: |
+          python scripts/summarize_scaling.py > /dev/null
+          python scripts/summarize_seeds.py > /dev/null
+          git diff --exit-code -- results/eval/scaling/summary.md results/eval/seeds/summary.md
